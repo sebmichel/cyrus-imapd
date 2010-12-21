@@ -97,6 +97,7 @@
 #include "mkgmtime.h"
 #include "mupdate-client.h"
 #include "nntp_err.h"
+#include "partlist.h"
 #include "proc.h"
 #include "prot.h"
 #include "proxy.h"
@@ -702,6 +703,8 @@ void shut_down(int code)
 
     annotatemore_close();
     annotatemore_done();
+
+    partlist_local_done();
 
     if (nntp_in) {
 	prot_NONBLOCK(nntp_in);

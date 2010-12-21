@@ -134,13 +134,16 @@ int getxstring(struct protstream *pin, struct protstream *pout,
 #define getstring(pin, pout, buf) getxstring((pin), (pout), (buf), IMAP_STRING)
 int getint32(struct protstream *pin, int *num);
 int getuint32(struct protstream *pin, unsigned int *num);
+#ifdef HAVE_LONG_LONG_INT
+int getint64(struct protstream *pin, long long int *num);
+int getuint64(struct protstream *pin, unsigned long long int *num);
+#endif
 
 void eatline(struct protstream *pin, int c);
 
 /* Misc utils */
 extern void cyrus_ctime(time_t date, char *datebuf);
 extern int shutdown_file(char *buf, int size);
-extern char *find_free_partition(unsigned long *tavail);
 
 /* Misc globals */
 extern int in_shutdown;

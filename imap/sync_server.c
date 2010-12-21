@@ -86,6 +86,7 @@
 #include "mailbox.h"
 #include "map.h"
 #include "mboxlist.h"
+#include "partlist.h"
 #include "proc.h"
 #include "prot.h"
 #include "quota.h"
@@ -483,6 +484,8 @@ void shut_down(int code)
 
     annotatemore_close();
     annotatemore_done();
+
+    partlist_local_done();
 
     if (sync_in) {
 	prot_NONBLOCK(sync_in);

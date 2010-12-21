@@ -271,6 +271,53 @@ int getuint32(struct protstream *pin, uint32_t *num)
     return c;
 }
 
+#ifdef HAVE_LONG_LONG_INT
+int getint64(struct protstream *pin, int64_t *num)
+{
+    int64_t result = 0;
+    char c;
+    int gotchar = 0;
+
+    /* LLONG_MAX == 9223372036854775807LL */
+    while ((c = prot_getc(pin)) != EOF && cyrus_isdigit(c)) {
+	if (result > 922337203685477580LL || (result == 922337203685477580LL && (c > '7')))
+	    fatal("num too big", EC_IOERR);
+	result = result * 10 + c - '0';
+	gotchar = 1;
+    }
+
+    if (!gotchar)
+	return EOF;
+
+    *num = result;
+
+    return c;
+}
+
+/* can't flag with -1 if there is no number here, so return EOF */
+int getuint64(struct protstream *pin, uint64_t *num)
+{
+    uint64_t result = 0;
+    char c;
+    int gotchar = 0;
+
+    /* ULLONG_MAX == 18446744073709551615ULL */
+    while ((c = prot_getc(pin)) != EOF && cyrus_isdigit(c)) {
+	if (result > 1844674407370955161ULL || (result == 1844674407370955161ULL && (c > '5')))
+	    fatal("num too big", EC_IOERR);
+	result = result * 10 + c - '0';
+	gotchar = 1;
+    }
+
+    if (!gotchar)
+	return EOF;
+
+    *num = result;
+
+    return c;
+}
+#endif
+
 /*
  * Eat characters up to and including the next newline
  * Also look for and eat non-synchronizing literals.

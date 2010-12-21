@@ -96,6 +96,7 @@
 #include "mbdump.h"
 #include "mkgmtime.h"
 #include "mupdate-client.h"
+#include "partlist.h"
 #include "proc.h"
 #include "quota.h"
 #include "seen.h"
@@ -1026,6 +1027,8 @@ void shut_down(int code)
 	statuscache_close();
 	statuscache_done();
     }
+
+    partlist_local_done();
 
     if (imapd_in) {
 	/* Flush the incoming buffer */
@@ -4994,7 +4997,7 @@ void cmd_create(char *tag, char *name, char *partition, int localonly)
 		/* use defaultserver if specified */
 		partition = (char *)config_getstring(IMAPOPT_DEFAULTSERVER);
 
-		/* otherwise, find server with most available space */
+		/* otherwise, find most fitting server */
 		if (!partition) partition = find_free_server();
 
 		if (!partition) r = IMAP_SERVER_UNAVAILABLE;
