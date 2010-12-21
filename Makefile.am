@@ -412,9 +412,9 @@ imap_libcyrus_imap_la_SOURCES = imap/annotate.c imap/annotate.h imap/append.c \
 	imap/mboxlist.h imap/mboxname.c imap/mboxname.h imap/message_guid.c \
 	imap/message_guid.h imap/message.c imap/message.h \
 	imap/mupdate-client.c imap/mupdate-client.h imap/mutex.h \
-	imap/notify.c imap/notify.h imap/proc.c imap/proc.h imap/protocol.h \
-	imap/quota_db.c imap/rfc822_header.c imap/rfc822_header.h \
-	imap/saslclient.c imap/saslclient.h imap/saslserver.c \
+	imap/notify.c imap/notify.h imap/partlist.c imap/partlist.h imap/proc.c \
+	imap/proc.h imap/protocol.h imap/quota_db.c imap/rfc822_header.c \
+	imap/rfc822_header.h imap/saslclient.c imap/saslclient.h imap/saslserver.c \
 	imap/search_engines.c imap/search_engines.h imap/seen.h \
 	imap/seen_db.c imap/sequence.c imap/sequence.h imap/setproctitle.c \
 	imap/squat.c imap/squat.h imap/squat_internal.c imap/squat_internal.h \

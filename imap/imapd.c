@@ -97,6 +97,7 @@
 #include "mboxname.h"
 #include "mbdump.h"
 #include "mupdate-client.h"
+#include "partlist.h"
 #include "proc.h"
 #include "quota.h"
 #include "seen.h"
@@ -1062,6 +1063,8 @@ void shut_down(int code)
 	statuscache_close();
 	statuscache_done();
     }
+
+    partlist_local_done();
 
     if (imapd_in) {
 	/* Flush the incoming buffer */
@@ -5361,16 +5364,17 @@ static void cmd_create(char *tag, char *name, struct dlist *extargs, int localon
 					    NULL, &foundpart, 0);
 	    partition = foundpart;
 
-	    if (!r && !partition &&
+	    if ((!r || (r == IMAP_PARTITION_UNKNOWN)) && !partition &&
 		(config_mupdate_config == IMAP_ENUM_MUPDATE_CONFIG_STANDARD) &&
 		!config_getstring(IMAPOPT_PROXYSERVERS)) {
 		/* proxy-only server, and no parent mailbox */
+		r = 0;
 		guessedpart = 0;
 
 		/* use defaultserver if specified */
 		partition = config_getstring(IMAPOPT_DEFAULTSERVER);
 
-		/* otherwise, find server with most available space */
+		/* otherwise, find most fitting server */
 		if (!partition) partition = find_free_server();
 
 		if (!partition) r = IMAP_SERVER_UNAVAILABLE;
