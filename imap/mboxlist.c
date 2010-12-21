@@ -70,6 +70,7 @@
 #include "cyrusdb.h"
 #include "util.h"
 #include "mailbox.h"
+#include "partlist.h"
 #include "exitcodes.h"
 #include "imap_err.h"
 #include "xmalloc.h"
@@ -612,8 +613,8 @@ mboxlist_mycreatemailboxcheck(const char *mboxname,
 		/* use defaultpartition if specified */
 		partition = (char *)config_defpartition;
 
-		/* otherwise find partition with most available space */
-		if (!partition) partition = find_free_partition(NULL);
+		/* otherwise find most fitting partition */
+		if (!partition) partition = (char *)partlist_local_select();
 
 		if (strlen(partition) > MAX_PARTITION_LEN) {
 		    /* Configuration error */

@@ -147,12 +147,14 @@ int getxstring(struct protstream *pin, struct protstream *pout,
 int getint32(struct protstream *pin, int *num);
 int getsint32(struct protstream *pin, int *num);
 int getuint32(struct protstream *pin, unsigned int *num);
+int getint64(struct protstream *pin, long long int *num);
+int getsint64(struct protstream *pin, long long int *num);
+int getuint64(struct protstream *pin, unsigned long long int *num);
 
 void eatline(struct protstream *pin, int c);
 
 /* Misc utils */
 extern int shutdown_file(char *buf, int size);
-extern char *find_free_partition(unsigned long *tavail);
 extern char *find_msgid(char *, char **);
 
 /* Misc globals */

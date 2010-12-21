@@ -92,6 +92,7 @@
 #include "map.h"
 #include "message.h"
 #include "message_guid.h"
+#include "partlist.h"
 #include "xmalloc.h"
 #include "xstrlcpy.h"
 #include "xstrlcat.h"
@@ -385,6 +386,8 @@ int main(int argc, char **argv)
 
     quotadb_close();
     quotadb_done();
+
+    partlist_local_done();
 
     cyrus_done();
 

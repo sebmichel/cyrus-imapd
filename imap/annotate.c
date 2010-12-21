@@ -51,6 +51,11 @@
 #include <unistd.h>
 #endif
 #include <errno.h>
+#ifdef HAVE_INTTYPES_H
+# include <inttypes.h>
+#elif defined(HAVE_STDINT_H)
+# include <stdint.h>
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
@@ -69,6 +74,7 @@
 #include "times.h"
 #include "imap_err.h"
 #include "mboxlist.h"
+#include "partlist.h"
 #include "util.h"
 #include "xmalloc.h"
 #include "xstrlcpy.h"
@@ -690,13 +696,63 @@ static void annotation_get_freespace(const char *int_mboxname __attribute__((unu
 				     struct mboxlist_entry *mbentry __attribute__((unused)),
 				     void *rock __attribute__((unused)))
 {
-    unsigned long tavail;
+    uint64_t tavail = 0;
     char value[21];
     struct annotation_data attrib;
 
-    (void) find_free_partition(&tavail);
+    (void) partlist_local_find_freespace_most(0, NULL, NULL, &tavail, NULL);
 
-    if (snprintf(value, sizeof(value), "%lu", tavail) == -1) return;
+    if (snprintf(value, sizeof(value), "%" PRIuMAX, (uintmax_t)tavail) == -1) return;
+
+    memset(&attrib, 0, sizeof(attrib));
+
+    attrib.value = value;
+    attrib.size = strlen(value);
+    attrib.contenttype = "text/plain";
+
+    output_entryatt(ext_mboxname, entry, "", &attrib, fdata);
+}
+
+static void annotation_get_freespace_total(const char *int_mboxname __attribute__((unused)),
+					   const char *ext_mboxname,
+					   const char *entry,
+					   struct fetchdata *fdata,
+					   struct mboxlist_entry *mbentry __attribute__((unused)),
+					   void *rock __attribute__((unused)))
+{
+    uint64_t tavail = 0;
+    uint64_t ttotal = 0;
+    char value[21];
+    struct annotation_data attrib;
+
+    (void) partlist_local_find_freespace_most(0, NULL, NULL, &tavail, &ttotal);
+
+    if (snprintf(value, sizeof(value), "%" PRIuMAX ";%" PRIuMAX, (uintmax_t)tavail, (uintmax_t)ttotal) == -1) return;
+
+    memset(&attrib, 0, sizeof(attrib));
+
+    attrib.value = value;
+    attrib.size = strlen(value);
+    attrib.contenttype = "text/plain";
+
+    output_entryatt(ext_mboxname, entry, "", &attrib, fdata);
+}
+
+static void annotation_get_freespace_percent_most(const char *int_mboxname __attribute__((unused)),
+						  const char *ext_mboxname,
+						  const char *entry,
+						  struct fetchdata *fdata,
+						  struct mboxlist_entry *mbentry __attribute__((unused)),
+						  void *rock __attribute__((unused)))
+{
+    uint64_t avail = 0;
+    uint64_t total = 0;
+    char value[21];
+    struct annotation_data attrib;
+
+    (void) partlist_local_find_freespace_most(1, &avail, &total, NULL, NULL);
+
+    if (snprintf(value, sizeof(value), "%" PRIuMAX ";%" PRIuMAX, (uintmax_t)avail, (uintmax_t)total) == -1) return;
 
     memset(&attrib, 0, sizeof(attrib));
 
@@ -1121,6 +1177,10 @@ const struct annotate_f_entry server_legacy_entries[] =
       annotation_get_fromfile, (void *)"shutdown" },
     { "/vendor/cmu/cyrus-imapd/freespace", BACKEND_ONLY,
       annotation_get_freespace, NULL },
+    { "/vendor/cmu/cyrus-imapd/freespace/total", BACKEND_ONLY,
+      annotation_get_freespace_total, NULL },
+    { "/vendor/cmu/cyrus-imapd/freespace/percent/most", BACKEND_ONLY,
+      annotation_get_freespace_percent_most, NULL },
     { NULL, ANNOTATION_PROXY_T_INVALID, NULL, NULL }
 };
 
