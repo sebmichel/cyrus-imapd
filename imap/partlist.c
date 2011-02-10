@@ -331,7 +331,10 @@ static void partlist_compute_quota(partlist_t *part_list)
     int j;
     unsigned long id;
     int default_quota = 0;
-    double percent_available;
+    /* Note: made this variable volatile to prevent possible CPU floating-point
+     * precision mayhem between registers (used with compilation optimizations)
+     * and memory variables. */
+    volatile double percent_available;
     double percent_used;
     double quota_total = 0;
     double quota_min = 100.;
