@@ -330,11 +330,7 @@ static void partlist_compute_quota(partlist_t *part_list)
     int i;
     int j;
     unsigned long id;
-    int default_quota = 0;
-    /* Note: made this variable volatile to prevent possible CPU floating-point
-     * precision mayhem between registers (used with compilation optimizations)
-     * and memory variables. */
-    volatile double percent_available;
+    double percent_available;
     double percent_used;
     double quota_total = 0;
     double quota_min = 100.;
@@ -383,26 +379,28 @@ static void partlist_compute_quota(partlist_t *part_list)
 	if ((percent_available<0.) || (percent_available>100.)) {
 	    /* fallback to random mode */
 	    part_list->force_random = 1;
-	    default_quota = 1;
 	    break;
 	}
 
 	part_list->items[i].quota = percent_available;
+	/* Note: beware floating-point precision between variables stored in
+	 * memory and CPU registers. From now on, do not use percent_available.
+	 */
 
-	if (percent_available < quota_min) {
-	    quota_min = percent_available;
+	if (part_list->items[i].quota < quota_min) {
+	    quota_min = part_list->items[i].quota;
 	}
 
 	/* check free space against limit */
-	if (percent_available <= quota_limit) {
+	if (part_list->items[i].quota <= quota_limit) {
 	    /* entry below limit, will not be taken into account (unless all
 	       entries are below limit) */
 	    continue;
 	}
 	/* at least one entry is ok, quota limit can be applied */
 	quota_limit_use = 1;
-	if (percent_available < quota_min_limit) {
-	    quota_min_limit = percent_available;
+	if (part_list->items[i].quota < quota_min_limit) {
+	    quota_min_limit = part_list->items[i].quota;
 	}
     }
 
@@ -411,19 +409,39 @@ static void partlist_compute_quota(partlist_t *part_list)
     }
 
     for (i=0 ; i<part_list->size ; i++) {
-	if (default_quota) {
+	if (part_list->force_random) {
 	    part_list->items[i].quota = 50.0;
 	}
 	else if (quota_limit_use && (part_list->items[i].quota <= quota_limit)) {
 	    /* entry is below limit, make sure not to select it */
 	    part_list->items[i].quota = 0.;
 	}
-	else if ((mode == PART_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA) && (part_list->items[i].quota >= quota_min)) {
+	else if (mode == PART_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA) {
+	    /* Note: according to previous tests, current item quota shall be
+	     * >= quota_min. Even with differences in floating-point precision
+	     * between variables stored in memory and CPU registers, the former
+	     * would be slightly under the latter, which would not matter since
+	     * we are about to add .5.
+	     */
+
 	    /* the goal is to reach the level of the most used volume */
 	    part_list->items[i].quota -= quota_min;
 	    /* but prevent the most used one to starve */
 	    part_list->items[i].quota += .5;
+
+	    /* Sanity check */
+	    if (part_list->items[i].quota < 0) {
+		/* Guess that may happen considering floating-point precision
+		 * issues if current item quota was near quota_limit ?
+		 */
+		part_list->items[i].quota = 0.;
 	}
+	}
+    }
+
+    if (part_list->force_random) {
+	/* nothing else to do */
+	return;
     }
 
     if ((mode == PART_MODE_FREESPACE_PERCENT_WEIGHTED) || (mode == PART_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA)) {
