@@ -435,7 +435,7 @@ static void partlist_compute_quota(partlist_t *part_list)
 		 * issues if current item quota was near quota_limit ?
 		 */
 		part_list->items[i].quota = 0.;
-	}
+	    }
 	}
     }
 
