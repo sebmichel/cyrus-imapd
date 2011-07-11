@@ -887,9 +887,9 @@ selected, and those chances increase when other partitions get closer
 /* For a given session, number of \fBoperations\fR (e.g. partition selection)
    for which partitions usage data are cached. */
 
-{ "partition_mode_weighted_usage_limit", 0, INT }
-/* When using weighted mode, limit of partition usage (%): if a partition is
-   over that limit, it is automatically excluded from selection mode.
+{ "partition_mode_soft_usage_limit", 0, INT }
+/* Limit of partition usage (%): if a partition is over that limit, it is
+   automatically excluded from selection mode.
 .PP
 If all partitions are over that limit, this feature is not used anymore.
  */
@@ -1131,9 +1131,12 @@ partition of each backend
 /* For a given session, number of \fBoperations\fR (e.g. backend selection)
    for which backend usage data are cached. */
 
-{ "serverlist_mode_weighted_usage_limit", 0, INT }
-/* When using weighted mode, limit of backend usage (%): if a backend is
-   over that limit, it is automatically excluded from selection mode.
+{ "serverlist_mode_soft_usage_limit", 0, INT }
+/* Limit of backend usage (%): if a backend is over that limit, it is
+   automatically excluded from selection mode.
+.PP
+If all backends are over that limit, this feature is not used anymore.
+ */
 
 { "servername", NULL, STRING }
 /* This is the hostname visible in the greeting messages of the POP,

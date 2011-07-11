@@ -94,7 +94,7 @@ partmode_t partlist_getmode(const char *mode)
 void partlist_initialize(partlist_t *part_list, cb_part_filldata filldata,
 			 const char *key_prefix, const char *key_value,
 			 const char *excluded, partmode_t mode,
-			 int weighted_usage_limit, int reinit)
+			 int soft_usage_limit, int reinit)
 {
     partlist_conf_t part_list_conf;
     char *excluded_parts = NULL;
@@ -107,7 +107,7 @@ void partlist_initialize(partlist_t *part_list, cb_part_filldata filldata,
     part_list->mode = mode;
     part_list->filldata = (filldata ? filldata : partition_filldata);
     part_list->size = 0;
-    part_list->weighted_usage_limit = weighted_usage_limit;
+    part_list->soft_usage_limit = soft_usage_limit;
     part_list->reinit = reinit;
 
     part_list_conf.part_list = part_list;
@@ -315,8 +315,8 @@ static void partlist_compute_quota(partlist_t *part_list)
     double quota_total = 0;
     double quota_min = 100.;
     double quota_min_limit = 100.;
-    double quota_limit = 100. - part_list->weighted_usage_limit;
-    int quota_limit_use = 0;
+    double soft_quota_limit = 100. - part_list->soft_usage_limit;
+    int soft_quota_limit_use = 0;
     partmode_t mode = part_list->mode;
 
     part_list->force_random = 0;
@@ -372,19 +372,19 @@ static void partlist_compute_quota(partlist_t *part_list)
 	}
 
 	/* check free space against limit */
-	if (part_list->items[i].quota <= quota_limit) {
+	if (part_list->items[i].quota <= soft_quota_limit) {
 	    /* entry below limit, will not be taken into account (unless all
 	       entries are below limit) */
 	    continue;
 	}
 	/* at least one entry is ok, quota limit can be applied */
-	quota_limit_use = 1;
+	soft_quota_limit_use = 1;
 	if (part_list->items[i].quota < quota_min_limit) {
 	    quota_min_limit = part_list->items[i].quota;
 	}
     }
 
-    if (quota_limit_use) {
+    if (soft_quota_limit_use) {
 	quota_min = quota_min_limit;
     }
 
@@ -392,7 +392,7 @@ static void partlist_compute_quota(partlist_t *part_list)
 	if (part_list->force_random) {
 	    part_list->items[i].quota = 50.0;
 	}
-	else if (quota_limit_use && (part_list->items[i].quota <= quota_limit)) {
+	else if (soft_quota_limit_use && (part_list->items[i].quota <= soft_quota_limit)) {
 	    /* entry is below limit, make sure not to select it */
 	    part_list->items[i].quota = 0.;
 	}
@@ -513,7 +513,7 @@ void partlist_local_init(void)
 	NULL,
 	config_getstring(IMAPOPT_PARTITION_MODE_EXCLUDE),
 	partlist_getmode(config_getstring(IMAPOPT_PARTITION_MODE)),
-	config_getint(IMAPOPT_PARTITION_MODE_WEIGHTED_USAGE_LIMIT),
+	config_getint(IMAPOPT_PARTITION_MODE_SOFT_USAGE_LIMIT),
 	config_getint(IMAPOPT_PARTITION_MODE_USAGE_REINIT)
     );
 }

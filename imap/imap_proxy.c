@@ -1354,7 +1354,7 @@ char *find_free_server(void)
 		servers,
 		NULL,
 		partlist_getmode(config_getstring(IMAPOPT_SERVERLIST_MODE)),
-		config_getint(IMAPOPT_SERVERLIST_MODE_WEIGHTED_USAGE_LIMIT),
+		config_getint(IMAPOPT_SERVERLIST_MODE_SOFT_USAGE_LIMIT),
 		config_getint(IMAPOPT_SERVERLIST_MODE_USAGE_REINIT)
 	    );
 	}

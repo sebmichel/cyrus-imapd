@@ -94,8 +94,8 @@ typedef struct partlist {
     partmode_t              mode;
     /** Whether to actually use random mode */
     int                     force_random;
-    /** Usage limit with weighted mode */
-    int                     weighted_usage_limit;
+    /** Usage limit */
+    int                     soft_usage_limit;
     /** Reinit limit */
     int                     reinit;
     /** Reinit counter */
@@ -116,13 +116,13 @@ partmode_t partlist_getmode(const char *mode);
  * @param in key_value      key value, to be used if list of items is stored in one option
  * @param in excluded       excluded items list
  * @param in mode           items mode
- * @param in weighted_usage_limit usage limit with weighted mode
+ * @param in soft_usage_limit usage limit
  * @param in reinit         reinit items data after given amount of operations
  */
 void partlist_initialize(partlist_t *part_list, cb_part_filldata filldata,
                          const char *key_prefix, const char *key_value,
                          const char *excluded, partmode_t mode,
-                         int weighted_usage_limit, int reinit);
+                         int soft_usage_limit, int reinit);
 
 /**
  * \brief Selects item value from list.
