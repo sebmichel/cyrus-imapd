@@ -74,19 +74,19 @@ static partlist_t *partlist_local = NULL;
 partmode_t partlist_getmode(const char *mode)
 {
     if (!strcmp(mode, "freespace-most")) {
-	return PART_MODE_FREESPACE_MOST;
+	return PART_SELECT_MODE_FREESPACE_MOST;
     }
     else if (!strcmp(mode, "freespace-percent-most")) {
-	return PART_MODE_FREESPACE_PERCENT_MOST;
+	return PART_SELECT_MODE_FREESPACE_PERCENT_MOST;
     }
     else if (!strcmp(mode, "freespace-percent-weighted")) {
-	return PART_MODE_FREESPACE_PERCENT_WEIGHTED;
+	return PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED;
     }
     else if (!strcmp(mode, "freespace-percent-weighted-delta")) {
-	return PART_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA;
+	return PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA;
     }
     else {
-	return PART_MODE_RANDOM;
+	return PART_SELECT_MODE_RANDOM;
     }
 }
 
@@ -231,7 +231,7 @@ static int partlist_selectpart_index(partlist_t *part_list)
 
     partlist_bump_action(part_list);
 
-    if ((part_list->mode == PART_MODE_RANDOM) || part_list->force_random) {
+    if ((part_list->mode == PART_SELECT_MODE_RANDOM) || part_list->force_random) {
 	do_random = 1;
     }
     else {
@@ -240,7 +240,7 @@ static int partlist_selectpart_index(partlist_t *part_list)
 	uint64_t max_available = 0;
 
 	switch (part_list->mode) {
-	case PART_MODE_FREESPACE_MOST:
+	case PART_SELECT_MODE_FREESPACE_MOST:
 	    for (i = 0; i < part_list->size; i++) {
 		if (part_list->items[i].quota == 0.) {
 		    continue;
@@ -253,7 +253,7 @@ static int partlist_selectpart_index(partlist_t *part_list)
 	    }
 	    break;
 
-	case PART_MODE_FREESPACE_PERCENT_MOST:
+	case PART_SELECT_MODE_FREESPACE_PERCENT_MOST:
 	    for (i = 0 ;i < part_list->size; i++) {
 		if (part_list->items[i].quota == 0.) {
 		    continue;
@@ -266,8 +266,8 @@ static int partlist_selectpart_index(partlist_t *part_list)
 	    }
 	    break;
 
-	case PART_MODE_FREESPACE_PERCENT_WEIGHTED:
-	case PART_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA:
+	case PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED:
+	case PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA:
 	    /* random in [0,100[ */
 	    val = 100. * ((double)rand() / (RAND_MAX + 1.));
 
@@ -321,7 +321,7 @@ static void partlist_compute_quota(partlist_t *part_list)
 
     part_list->force_random = 0;
 
-    if (mode == PART_MODE_RANDOM) {
+    if (mode == PART_SELECT_MODE_RANDOM) {
 	/* No need to check items usage */
 	for (i = 0; i < part_list->size; i++) {
 	    part_list->items[i].quota = 50.0;
@@ -333,7 +333,7 @@ static void partlist_compute_quota(partlist_t *part_list)
     for (i = 0; i < part_list->size; i++) {
 	part_list->filldata(part_list, i);
 
-	if ((mode == PART_MODE_FREESPACE_MOST) || (mode == PART_MODE_FREESPACE_PERCENT_MOST)) {
+	if ((mode == PART_SELECT_MODE_FREESPACE_MOST) || (mode == PART_SELECT_MODE_FREESPACE_PERCENT_MOST)) {
 	    id = part_list->items[i].id;
 	    for (j = i-1; j >= 0; j--) {
 		if (id == part_list->items[j].id) {
@@ -396,7 +396,7 @@ static void partlist_compute_quota(partlist_t *part_list)
 	    /* entry is below limit, make sure not to select it */
 	    part_list->items[i].quota = 0.;
 	}
-	else if (mode == PART_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA) {
+	else if (mode == PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA) {
 	    /* Note: according to previous tests, current item quota shall be
 	     * >= quota_min. Even with differences in floating-point precision
 	     * between variables stored in memory and CPU registers, the former
@@ -421,7 +421,7 @@ static void partlist_compute_quota(partlist_t *part_list)
 	return;
     }
 
-    if ((mode == PART_MODE_FREESPACE_PERCENT_WEIGHTED) || (mode == PART_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA)) {
+    if ((mode == PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED) || (mode == PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA)) {
 	/* normalize */
 	for (i = 0; i < part_list->size; i++) {
 	    quota_total += part_list->items[i].quota;
@@ -511,10 +511,10 @@ void partlist_local_init(void)
 	NULL,
 	"partition-",
 	NULL,
-	config_getstring(IMAPOPT_PARTITION_MODE_EXCLUDE),
-	partlist_getmode(config_getstring(IMAPOPT_PARTITION_MODE)),
-	config_getint(IMAPOPT_PARTITION_MODE_SOFT_USAGE_LIMIT),
-	config_getint(IMAPOPT_PARTITION_MODE_USAGE_REINIT)
+	config_getstring(IMAPOPT_PARTITION_SELECT_EXCLUDE),
+	partlist_getmode(config_getstring(IMAPOPT_PARTITION_SELECT_MODE)),
+	config_getint(IMAPOPT_PARTITION_SELECT_SOFT_USAGE_LIMIT),
+	config_getint(IMAPOPT_PARTITION_SELECT_USAGE_REINIT)
     );
 }
 

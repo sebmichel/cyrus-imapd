@@ -1353,9 +1353,9 @@ char *find_free_server(void)
 		NULL,
 		servers,
 		NULL,
-		partlist_getmode(config_getstring(IMAPOPT_SERVERLIST_MODE)),
-		config_getint(IMAPOPT_SERVERLIST_MODE_SOFT_USAGE_LIMIT),
-		config_getint(IMAPOPT_SERVERLIST_MODE_USAGE_REINIT)
+		partlist_getmode(config_getstring(IMAPOPT_SERVERLIST_SELECT_MODE)),
+		config_getint(IMAPOPT_SERVERLIST_SELECT_SOFT_USAGE_LIMIT),
+		config_getint(IMAPOPT_SERVERLIST_SELECT_USAGE_REINIT)
 	    );
 	}
 
@@ -1390,7 +1390,7 @@ static void proxy_part_filldata(partlist_t *part_list, int idx)
 
 	/* fetch annotation from remote */
 	proxy_gentag(mytag, sizeof(mytag));
-	if (part_list->mode == PART_MODE_FREESPACE_MOST) {
+	if (part_list->mode == PART_SELECT_MODE_FREESPACE_MOST) {
 	    prot_printf(be->out,
 			"%s GETANNOTATION \"\" "
 			"\"/vendor/cmu/cyrus-imapd/freespace/total\" "
@@ -1411,7 +1411,7 @@ static void proxy_part_filldata(partlist_t *part_list, int idx)
 	    c = prot_getc(be->in);
 	    if (c != ' ') { /* protocol error */ c = EOF; break; }
 
-	    if (part_list->mode == PART_MODE_FREESPACE_MOST) {
+	    if (part_list->mode == PART_SELECT_MODE_FREESPACE_MOST) {
 		c = chomp(be->in,
 			  "ANNOTATION \"\" "
 			  "\"/vendor/cmu/cyrus-imapd/freespace/total\" "

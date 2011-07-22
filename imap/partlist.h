@@ -62,15 +62,15 @@ typedef struct partitem {
 
 typedef enum partmode {
     /** Random */
-    PART_MODE_RANDOM,
+    PART_SELECT_MODE_RANDOM,
     /** Most free space. */
-    PART_MODE_FREESPACE_MOST,
+    PART_SELECT_MODE_FREESPACE_MOST,
     /** Most free space (percent). */
-    PART_MODE_FREESPACE_PERCENT_MOST,
+    PART_SELECT_MODE_FREESPACE_PERCENT_MOST,
     /** Weighted free space (percent) */
-    PART_MODE_FREESPACE_PERCENT_WEIGHTED,
+    PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED,
     /** Weighted free space (percent) delta */
-    PART_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA
+    PART_SELECT_MODE_FREESPACE_PERCENT_WEIGHTED_DELTA
 } partmode_t;
 
 struct partlist;
