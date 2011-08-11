@@ -207,6 +207,7 @@ while (<STDIN>) {
 	    my @values;
 	    my $e;
 	    my $v;
+	    my $vv;
 	    my $count = 0;
 
 	    # strip quotes from default value
