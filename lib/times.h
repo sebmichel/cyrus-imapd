@@ -63,7 +63,7 @@ int time_to_rfc822(time_t t, char *buf, size_t len);
  * ISO8601 (RFC3339) datetime format
  */
 int time_from_iso8601(const char *s, time_t *);
-int time_to_iso8601(time_t t, char *buf, size_t len);
+int time_to_iso8601(time_t t, time_t fracsec, char *buf, size_t len);
 
 /*
  * RFC3501 datetime format

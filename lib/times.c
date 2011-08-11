@@ -396,6 +396,7 @@ EXPORTED int time_from_iso8601(const char *s, time_t *tp)
     int n, tm_off;
 
     /* parse the ISO 8601 date/time */
+    /* XXX should use strptime ? */
     memset(&exp, 0, sizeof(struct tm));
     n = sscanf(s, "%4d-%2d-%2dT%2d:%2d:%2d", 
 	       &exp.tm_year, &exp.tm_mon, &exp.tm_mday,
@@ -449,10 +450,19 @@ EXPORTED int time_from_iso8601(const char *s, time_t *tp)
  *
  * Returns: number of characters in @buf generated, or -1 on error.
  */
-EXPORTED int time_to_iso8601(time_t t, char *buf, size_t len)
+EXPORTED int time_to_iso8601(time_t t, time_t secfrac, char *buf, size_t len)
 {
     struct tm *exp = (struct tm *) gmtime(&t);
-    return strftime(buf, len, "%Y-%m-%dT%H:%M:%SZ", exp);
+    size_t rlen;
+
+    if (secfrac) {
+	/* choose to print ms */
+	rlen = strftime(buf, len, "%Y-%m-%dT%H:%M:%S", exp);
+	rlen += sprintf(buf+rlen, ".%03ldZ", secfrac);
+	return rlen;
+    }
+    else
+	return strftime(buf, len, "%Y-%m-%dT%H:%M:%SZ", exp);
 }
 
 
