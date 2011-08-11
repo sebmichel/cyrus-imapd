@@ -81,6 +81,7 @@
 #include "cyr_lock.h"
 #include "mailbox.h"
 #include "map.h"
+#include "mboxevent.h"
 #include "mboxlist.h"
 #include "mboxname.h"
 #include "message.h"
@@ -242,6 +243,9 @@ int service_init(int argc __attribute__((unused)),
 
 	/* setup for sending IMAP IDLE notifications */
 	idle_init();
+
+	/* setup for mailbox event notifications */
+	mboxevent_init();
     }
 
     /* Set namespace */
@@ -540,7 +544,7 @@ int deliver_mailbox(FILE *f,
 
     r = append_setup(&as, mailboxname,
 		     authuser, authstate, acloverride ? 0 : ACL_POST, 
-		     qdiffs, NULL, 0);
+		     qdiffs, NULL, 0, MessageNew);
     if (r) return r;
 
     /* check for duplicate message */
@@ -564,6 +568,7 @@ int deliver_mailbox(FILE *f,
     }
 
     if (!r) {
+	/* XXX may don't notify SPAM message */
 	r = append_fromstage(&as, &content->body, stage, 0,
 			     flags, !singleinstance,
 			     /*annotations*/NULL);

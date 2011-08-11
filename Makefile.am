@@ -405,7 +405,7 @@ imap_libcyrus_imap_la_SOURCES = imap/annotate.c imap/annotate.h imap/append.c \
 	imap/duplicate.h imap/global.c imap/global.h imap/idle.c imap/idle.h \
 	imap/idlemsg.c imap/idlemsg.h imap/imapparse.c imap/index.c \
 	imap/index.h imap/mailbox.c imap/mailbox.h imap/mbdump.c \
-	imap/mbdump.h imap/mboxkey.c imap/mboxkey.h imap/mboxlist.c \
+	imap/mbdump.h imap/mboxevent.c imap/mboxkey.c imap/mboxkey.h imap/mboxlist.c \
 	imap/mboxlist.h imap/mboxname.c imap/mboxname.h imap/message_guid.c \
 	imap/message_guid.h imap/message.c imap/message.h \
 	imap/mupdate-client.c imap/mupdate-client.h imap/mutex.h \

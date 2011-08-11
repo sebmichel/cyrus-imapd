@@ -61,6 +61,7 @@
 #include <ctype.h>
 
 #include "annotate.h" /* for strlist functionality */
+#include "mboxevent.h"
 #include "message_guid.h"
 #include "sequence.h"
 #include "strarray.h"
@@ -121,6 +122,7 @@ struct index_state {
     struct protstream *out;
     int qresync;
     struct auth_state *authstate;
+    struct event_state eventstate[2];
 };
 
 struct copyargs {

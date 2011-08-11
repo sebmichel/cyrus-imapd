@@ -544,7 +544,7 @@ static void do_dump(enum mboxop op, const char *part, int purge)
 	    
 	    wipe_head = wipe_head->next;
 	    
-	    ret = mboxlist_deletemailbox(me->mailbox, 1, "", NULL, 0, 1, 1);
+	    ret = mboxlist_deletemailbox(me->mailbox, 1, "", NULL, NULL, 0, 1, 1);
 	    if (ret) {
 		fprintf(stderr, "couldn't delete defunct mailbox %s\n",
 			me->mailbox);

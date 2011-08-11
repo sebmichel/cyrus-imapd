@@ -92,6 +92,7 @@
 #include "mailbox.h"
 #include "message.h"
 #include "map.h"
+#include "mboxevent.h"
 #include "mboxlist.h"
 #include "retry.h"
 #include "seen.h"
@@ -463,6 +464,37 @@ int cache_parserecord(struct buf *cachebase, unsigned cache_offset,
     crec->offset = cache_offset;
 
     return 0;
+}
+
+char *mailbox_cache_get_msgid(struct mailbox *mailbox,
+			      struct index_record *record)
+{
+    char *env;
+    char *envtokens[NUMENVTOKENS];
+    char *msgid;
+
+    if (mailbox_cacherecord(mailbox, record))
+	return NULL;
+
+    if (cacheitem_size(record, CACHE_ENVELOPE) <= 2)
+	return NULL;
+
+    /* get msgid out of the envelope
+     *
+     * get a working copy; strip outer ()'s
+     * +1 -> skip the leading paren
+     * -2 -> don't include the size of the outer parens
+     */
+    env = xstrndup(cacheitem_base(record, CACHE_ENVELOPE) + 1,
+		   cacheitem_size(record, CACHE_ENVELOPE) - 2);
+    parse_cached_envelope(env, envtokens, VECTOR_SIZE(envtokens));
+
+    msgid = envtokens[ENV_MSGID] ? xstrdup(envtokens[ENV_MSGID]) : NULL;
+
+    /* free stuff */
+    free(env);
+
+    return msgid;
 }
 
 HIDDEN int mailbox_ensure_cache(struct mailbox *mailbox, unsigned offset)
@@ -2726,6 +2758,7 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
     int numexpunged = 0;
     uint32_t recno;
     struct index_record record;
+    struct event_state event_state = EVENT_STATE_INITIALIZER;
 
     assert(mailbox_index_islocked(mailbox, 1));
 
@@ -2734,6 +2767,8 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	if (nexpunged) *nexpunged = 0;
 	return 0;
     }
+
+    event_newstate(MessageExpunge, &event_state);
 
     if (!decideproc) decideproc = expungedeleted;
 
@@ -2753,6 +2788,11 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 
 	    r = mailbox_rewrite_index_record(mailbox, &record);
 	    if (r) return IMAP_IOERROR;
+
+	    if (event_state.state) {
+		mboxevent_extract_record(&event_state, mailbox, &record);
+		event_state.state = EVENT_PENDING;
+	    }
 	}
     }
 
@@ -2760,6 +2800,14 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	syslog(LOG_NOTICE, "Expunged %d messages from %s",
 	       numexpunged, mailbox->name);
     }
+
+    /* send MessageExpunge event notification */
+    if (event_state.state == EVENT_PENDING) {
+	mboxevent_extract_mailbox(&event_state, mailbox);
+	mboxevent_notify(&event_state);
+    }
+    else
+	mboxevent_abort(&event_state);
 
     if (nexpunged) *nexpunged = numexpunged;
 
@@ -2810,6 +2858,8 @@ EXPORTED int mailbox_expunge_cleanup(struct mailbox *mailbox, time_t expunge_mar
 		   mailbox->name, record.uid, recno);
 	    break;
 	}
+
+	/* don't send again MessageExpunge notification for expired message */
     }
 
     if (dirty) {
@@ -2835,6 +2885,34 @@ EXPORTED int mailbox_internal_seen(struct mailbox *mailbox, const char *userid)
 
     /* otherwise the owner's seen state is internal */
     return mboxname_userownsmailbox(userid, mailbox->name);
+}
+
+/*
+ * Return the number of message without \Seen flag in a mailbox.
+ * Suppose that authenticated user is the owner or sharedseen is enabled
+ */
+unsigned mailbox_count_unseen(struct mailbox *mailbox)
+{
+    struct index_record record;
+    uint32_t recno;
+    unsigned count = 0;
+
+    assert(mailbox_index_islocked(mailbox, 0));
+
+    for (recno = 1; recno <= mailbox->i.num_records; recno++) {
+	if (mailbox_read_index_record(mailbox, recno, &record)) {
+	    syslog(LOG_WARNING, "%s: detecting bogus index record %u", mailbox->name,
+		   recno);
+	    continue;
+	}
+	if (record.system_flags & FLAG_EXPUNGED)
+	    continue;
+
+	if (!(record.system_flags & FLAG_SEEN))
+	    count++;
+    }
+
+    return count;
 }
 
 /* returns a mailbox locked in MAILBOX EXCLUSIVE mode, so you

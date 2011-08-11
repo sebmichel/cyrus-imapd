@@ -50,6 +50,7 @@
 #include "dlist.h"
 #include "mailbox.h"
 #include "auth.h"
+#include "mboxevent.h"
 #include "mboxname.h"
 
 extern struct db *mbdb;
@@ -122,10 +123,12 @@ int mboxlist_createmailboxcheck(const char *name, int mbtype,
 /* localonly creates the local mailbox without touching mupdate */
 /* forceuser allows the creation of user.x.<name> without a user.x */
 /* dbonly skips filesystem operations (e.g. reconstruct) */
+/* prepare MailboxCreate notification if event_state is not NULL */
 int mboxlist_createmailbox(const char *name, int mbtype,
 			   const char *partition,
 			   int isadmin, const char *userid, 
 			   struct auth_state *auth_state,
+			   struct event_state *event_state,
 			   int localonly, int forceuser, int dbonly,
 			   struct dlist *extargs);
 
@@ -138,9 +141,11 @@ int mboxlist_createsync(const char *name, int mbtype,
 
 /* delated delete */
 /* Translate delete into rename */
+/* prepare MailboxDelete notification if event_state is not NULL */
 int
 mboxlist_delayed_deletemailbox(const char *name, int isadmin, const char *userid, 
-                               struct auth_state *auth_state, int checkacl,
+                               struct auth_state *auth_state,
+                               struct event_state *event_state, int checkacl,
                                int force);
 /* Delete a mailbox. */
 /* setting local_only disables any communication with the mupdate server
@@ -148,15 +153,19 @@ mboxlist_delayed_deletemailbox(const char *name, int isadmin, const char *userid
  * MBTYPE_REMOTE or not */
 /* force ignores errors and just tries to wipe the mailbox off the face of
  * the planet */
+/* prepare MailboxDelete notification if event_state is not NULL */
 int mboxlist_deletemailbox(const char *name, int isadmin, const char *userid, 
-			   struct auth_state *auth_state, int checkacl,
+			   struct auth_state *auth_state,
+			   struct event_state *event_state, int checkacl,
 			   int local_only, int force);
 
 /* Rename/move a mailbox (hierarchical) */
+/* prepare MailboxRename notification if event_state is not NULL */
 int mboxlist_renamemailbox(const char *oldname, const char *newname,
 			   const char *partition, unsigned uidvalidity,
 			   int isadmin, const char *userid,
 			   struct auth_state *auth_state,
+			   struct event_state *event_state,
 			   int forceuser, int ignorequota);
 
 /* change ACL */

@@ -77,6 +77,7 @@
 #include "exitcodes.h"
 #include "imapd.h"
 #include "imap/imap_err.h"
+#include "mboxevent.h"
 #include "mailbox.h"
 #include "version.h"
 #include "xmalloc.h"
@@ -457,6 +458,9 @@ int service_init(int argc __attribute__((unused)),
     /* setup for sending IMAP IDLE notifications */
     idle_init();
 
+    /* setup for mailbox event notifications */
+    mboxevent_init();
+
     /* Set namespace */
     if ((r = mboxname_init_namespace(&popd_namespace, 1)) != 0) {
 	syslog(LOG_ERR, "%s", error_message(r));
@@ -820,6 +824,9 @@ static int expunge_deleted(void)
     uint32_t msgno;
     int r = 0;
     int numexpunged = 0;
+    struct event_state event_state = EVENT_STATE_INITIALIZER;
+
+    event_newstate(MessageExpunge, &event_state);
 
     /* loop over all known messages looking for deletes */
     for (msgno = 1; msgno <= popd_exists; msgno++) {
@@ -842,6 +849,11 @@ static int expunge_deleted(void)
 	/* store back to the mailbox */
 	r = mailbox_rewrite_index_record(popd_mailbox, &record);
 	if (r) break;
+
+	if (event_state.state) {
+	    mboxevent_extract_record(&event_state, popd_mailbox, &record);
+	    event_state.state = EVENT_PENDING;
+	}
     }
 
     if (r) {
@@ -853,6 +865,13 @@ static int expunge_deleted(void)
 	syslog(LOG_NOTICE, "Expunged %d messages from %s",
 	       numexpunged, popd_mailbox->name);
     }
+
+    if (event_state.state == EVENT_PENDING) {
+	mboxevent_extract_mailbox(&event_state, popd_mailbox);
+	mboxevent_notify(&event_state);
+    }
+    else
+	mboxevent_abort(&event_state);
 
     return r;
 }

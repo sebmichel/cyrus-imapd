@@ -245,6 +245,7 @@ static int expire(char *name, int matchlen __attribute__((unused)),
 			name, ((double)expire_seconds/86400));
 	    }
 
+	    /* XXX check to don't notify expired message because already done */
 	    r = mailbox_expunge(mailbox, expire_cb, erock, NULL);
 	    if (r)
 		syslog(LOG_ERR, "failed to expire old messages: %s", mailbox->name);
@@ -481,7 +482,7 @@ int main(int argc, char *argv[])
 	    if (verbose) {
 		fprintf(stderr, "Removing: %s\n", name);
 	    }
-	    r = mboxlist_deletemailbox(name, 1, NULL, NULL, 0, 0, 0);
+	    r = mboxlist_deletemailbox(name, 1, NULL, NULL, NULL, 0, 0, 0);
 	    count++;
 	}
 

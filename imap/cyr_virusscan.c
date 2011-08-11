@@ -503,7 +503,8 @@ void append_notifications()
 	    fflush(f);
 	    msgsize = ftell(f);
 
-	    append_setup(&as, i_mbox->owner, NULL, NULL, 0, NULL, NULL, 0);
+	    /* XXX send MessageNew or MessageAppend event notification here ? */
+	    append_setup(&as, i_mbox->owner, NULL, NULL, 0, NULL, NULL, 0, 0);
 	    pout = prot_new(fd, 0);
 	    prot_rewind(pout);
 	    append_fromstream(&as, &body, pout, msgsize, t, NULL);

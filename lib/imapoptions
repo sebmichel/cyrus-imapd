@@ -433,6 +433,30 @@ Blank lines and lines beginning with ``#'' are ignored.
    as having already been delivered to the mailbox.  Records the mailbox
    and message-id/resent-message-id of all successful deliveries. */
 
+{ "event_exclude_flags", NULL, STRING }
+/* Don't send event notification for given IMAP flag(s) */
+
+{ "event_exclude_folders", NULL, STRING }
+/* Don't send event notification for given folder(s). Set ALL for any folder */
+
+{ "event_extra_params", "timestamp", BITFIELD("flagnames", "messages", "timestamp", "uidnext", "vnd.cmu.host", "vnd.cmu.midset", "vnd.cmu.newMessages") }
+/* Space-separated list of extra parameters to add to any appropriated event. */ 
+
+{ "event_groups", "message flags mailbox", BITFIELD("message", "flags", "access", "mailbox") }
+/* Space-separated list of groups of related events to turn on notification */
+
+{ "event_notifspam", 1, SWITCH }
+/* Enable event notification for email rated as spam */
+
+{ "event_timestamp_format", "iso8601", ENUM("iso8601", "epoch") }
+/* Format event timestamp in ISO 8601 format  
+   or print the number of seconds since the Epoch (UTC)
+   both with fractions of second */ 
+
+{ "eventnotifier", NULL, STRING }
+/* Notifyd(8) method to use for "EVENT" notifications which are based on
+   the RFC 5423.  If not set, "EVENT" notifications are disabled. */
+
 { "expunge_mode", "default", ENUM("default", "immediate", "delayed") }
 /* The mode in which messages (and their corresponding cache entries)
    are expunged.  "default" mode is the default behavior in which the
