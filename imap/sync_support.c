@@ -1823,7 +1823,7 @@ int apply_annotations(struct mailbox *mailbox,
     int started_txn = 0;
     annotate_state_t *astate = annotate_state_new();
 
-    annotate_state_set_message(astate, mailbox, record->uid);
+    annotate_state_set_message(astate, mailbox, record ? record->uid : 0);
 
     /*
      * We rely here on the database scan order resulting in lists
