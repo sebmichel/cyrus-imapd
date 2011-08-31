@@ -954,6 +954,114 @@ out:
     return r;
 }
 
+struct computequota_rock {
+    struct mailbox *mailbox;
+    struct seqset *seq;
+    annotate_db_t *d;
+    uquota_t quota_usage;
+};
+
+static int computequota_cb(void *rock, const char *key, int keylen,
+			   const char *data, int datalen)
+{
+    struct computequota_rock *qrock = (struct computequota_rock *) rock;
+    const char *mboxname, *entry, *userid;
+    unsigned int uid;
+    struct buf value = BUF_INITIALIZER;
+    int r;
+
+#if DEBUG
+    syslog(LOG_ERR, "computequota_cb: found key %s in %s",
+	    key_as_string(frock->d, key, keylen), frock->d->filename);
+#endif
+
+    r = split_key(qrock->d, key, keylen, &mboxname,
+		  &uid, &entry, &userid);
+    if (r)
+	return r;
+
+    /* check the mailbox and uid */
+    if (strcmpsafe(qrock->mailbox->name, mboxname)) {
+	return 0;
+    }
+
+    if (uid && !seqset_ismember(qrock->seq, uid)) {
+	return 0;
+    }
+
+    r = split_attribs(data, datalen, &value);
+    qrock->quota_usage += value.len;
+
+    return r;
+}
+
+int annotatemore_computequota(struct mailbox *mailbox,
+			      uquota_t *quota_usage)
+{
+    char key[MAX_MAILBOX_PATH+1], *p;
+    int keylen, r;
+    struct index_record record;
+    struct computequota_rock qrock;
+    int recno;
+
+    assert(mailbox);
+    assert(quota_usage);
+
+    memset(&qrock, 0, sizeof(qrock));
+
+    qrock.mailbox = mailbox;
+    /* we need to know which uids do belong to the mailbox */
+    qrock.seq = seqset_init(mailbox->i.last_uid, SEQ_SPARSE);
+    for (recno = 1; recno <= mailbox->i.num_records ; recno++) {
+	if (mailbox_read_index_record(mailbox, recno, &record)) {
+	    continue;
+	}
+
+	if (record.system_flags & (FLAG_UNLINKED | FLAG_EXPUNGED)) {
+	    /* do not count expunged messages */
+	    continue;
+	}
+	seqset_add(qrock.seq, record.uid, /*ismember*/1);
+    }
+
+    /* first check mailbox annotations */
+    r = annotate_getdb(mailbox->name, 0, 0, &qrock.d);
+    if (r) {
+	if (r == CYRUSDB_NOTFOUND)
+	    r = 0;
+	goto out;
+    }
+
+    keylen = make_key(mailbox->name, 0, "/*", NULL, key, sizeof(key));
+    for (p = key; keylen; p++, keylen--) {
+	if (*p == '*' || *p == '%') break;
+    }
+    keylen = p - key;
+
+    r = DB->foreach(qrock.d->db, key, keylen, NULL, &computequota_cb,
+		    &qrock, tid(qrock.d));
+	if (r) goto out;
+
+    /* then check message annotations */
+    r = annotate_getdb(mailbox->name, 1, 0, &qrock.d);
+    if (r) {
+	if (r == CYRUSDB_NOTFOUND)
+	    r = 0;
+	goto out;
+    }
+
+    r = DB->foreach(qrock.d->db, "", 0, NULL, &computequota_cb,
+		    &qrock, tid(qrock.d));
+
+out:
+    annotate_putdb(&qrock.d);
+    seqset_free(qrock.seq);
+
+    *quota_usage += qrock.quota_usage;
+
+    return r;
+}
+
 /***************************  Annotate State Management  ***************************/
 
 annotate_state_t *annotate_state_new(void)

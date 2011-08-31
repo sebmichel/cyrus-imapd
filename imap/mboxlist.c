@@ -100,6 +100,8 @@ static int mboxlist_rmquota(const char *name, int matchlen, int maycreate,
 			    void *rock);
 static int mboxlist_changequota(const char *name, int matchlen, int maycreate,
 				void *rock);
+static int mboxlist_computequota(const char *name, int matchlen, int maycreate,
+				 void *rock);
 
 struct mboxlist_entry *mboxlist_entry_create(void)
 {
@@ -2444,6 +2446,12 @@ static int child_cb(char *name,
     return (*((int *) rock) = 1);
 }
 
+struct computequota_rock {
+    struct quota *quota;
+    /* hint: what really need to be computed */
+    int compute[QUOTA_NUMRESOURCES];
+};
+
 /*
  * Set all the resource quotas on, or create a quota root.
  */
@@ -2453,6 +2461,8 @@ int mboxlist_setquotas(const char *root,
     char pattern[MAX_MAILBOX_PATH+1];
     struct quota q;
     int have_mailbox = 1;
+    struct computequota_rock qrock;
+    int compute = 0;
     int r;
     int res;
     struct txn *tid = NULL;
@@ -2461,9 +2471,13 @@ int mboxlist_setquotas(const char *root,
 	|| strchr(root, '*') || strchr(root, '%') || strchr(root, '?')) {
 	return IMAP_MAILBOX_BADNAME;
     }
-    
+
+    memset(&q, 0, sizeof(q));
     q.root = root;
     r = quota_read(&q, &tid, 1);
+
+    memset(&qrock, 0, sizeof(qrock));
+    qrock.quota = &q;
 
     if (!r) {
 	int changed = 0;
@@ -2473,20 +2487,30 @@ int mboxlist_setquotas(const char *root,
 	    if (q.limits[res] != newquotas[res]) {
 		q.limits[res] = newquotas[res];
 		changed++;
+		/* Note: if this resource was not set, its usage was unlimited,
+		 * and thus is now bounded */
+		if (!q.sets[res]) {
+		    compute = 1;
+		    qrock.compute[res] = 1;
+		}
 	    }
 	}
-	if (changed)
-	    r = quota_write(&q, &tid);
-	if (!r)
-	    quota_commit(&tid);
-	goto done;
+
+	/* do we need to compute quota ? */
+	if (!compute) {
+	    if (changed)
+		r = quota_write(&q, &tid);
+	    if (!r)
+		quota_commit(&tid);
+	    goto done;
+	}
     }
 
-    if (r != IMAP_QUOTAROOT_NONEXISTENT)
+    if ((r != IMAP_QUOTAROOT_NONEXISTENT) && !compute)
 	goto done;
 
     /*
-     * Have to create a new quota root
+     * Have to compute or create a new quota root
      */
     strlcpy(pattern, root, sizeof(pattern));
 
@@ -2499,45 +2523,71 @@ int mboxlist_setquotas(const char *root,
 	struct mboxlist_entry *mbentry = NULL;
 	strlcat(pattern, ".*", sizeof(pattern));
 
-	/* look for a top-level mailbox in the proposed quotaroot */
-	r = mboxlist_lookup(root, &mbentry, NULL);
-	if (r) {
-	    if (!force && r == IMAP_MAILBOX_NONEXISTENT) {
-		/* look for a child mailbox in the proposed quotaroot */
-		 mboxlist_findall(NULL, pattern, 1, NULL, NULL,
-				 child_cb, (void *) &force);
+	if (!compute) {
+	    /* look for a top-level mailbox in the proposed quotaroot */
+	    r = mboxlist_lookup(root, &mbentry, NULL);
+	    if (r) {
+		if (!force && r == IMAP_MAILBOX_NONEXISTENT) {
+		    /* look for a child mailbox in the proposed quotaroot */
+		     mboxlist_findall(NULL, pattern, 1, NULL, NULL,
+				     child_cb, (void *) &force);
+		}
+		/* are we going to force the create anyway? */
+		if (force) {
+		    have_mailbox = 0;
+		    r = 0;
+		}
 	    }
-	    /* are we going to force the create anyway? */
-	    if (force) {
-		have_mailbox = 0;
-		r = 0;
+	    else if (mbentry->mbtype & (MBTYPE_REMOTE | MBTYPE_MOVING)) {
+		/* Can't set quota on a remote mailbox */
+		r = IMAP_MAILBOX_NOTSUPPORTED;
 	    }
+	    mboxlist_entry_free(&mbentry);
+	    if (r) goto done;
 	}
-	else if (mbentry->mbtype & (MBTYPE_REMOTE | MBTYPE_MOVING)) {
-	    /* Can't set quota on a remote mailbox */
-	    r = IMAP_MAILBOX_NOTSUPPORTED;
-	}
-	mboxlist_entry_free(&mbentry);
-	if (r) goto done;
     }
 
     /* initialise the quota */
-    for (res = 0 ; res < QUOTA_NUMRESOURCES ; res++)
-	q.useds[res] = 0;
+    for (res = 0 ; res < QUOTA_NUMRESOURCES ; res++) {
+	/* only (re)set needed resources; upon creating quota root always set
+	 * storage for backward compatibility */
+	if (qrock.compute[res] ||
+	    (!compute && ((res == QUOTA_STORAGE) || (newquotas[res] != QUOTA_UNLIMITED)))) {
+	    q.useds[res] = 0;
+	    q.sets[res] = 1;
+	}
+    }
     memcpy(q.limits, newquotas, sizeof(q.limits));
-    r = quota_write(&q, &tid);
-    if (r) goto done;
+    if (!compute) {
+	r = quota_write(&q, &tid);
+	if (r) goto done;
 
-    quota_commit(&tid);
+	quota_commit(&tid);
+    }
 
     /* recurse through mailboxes, setting the quota and finding
      * out the usage */
     /* top level mailbox */
-    if (have_mailbox)
-	mboxlist_changequota(root, 0, 0, (void *)root);
+    if (have_mailbox) {
+	if (compute) {
+	    mboxlist_computequota(root, 0, 0, (void *)&qrock);
+	}
+	else {
+	    mboxlist_changequota(root, 0, 0, (void *)root);
+	}
+    }
 
     /* submailboxes - we're using internal names here */
-    mboxlist_findall(NULL, pattern, 1, 0, 0, mboxlist_changequota, (void *)root);
+    mboxlist_findall(NULL, pattern, 1, 0, 0,
+	compute ? mboxlist_computequota : mboxlist_changequota,
+	compute ? (void *)&qrock : (void *)root);
+
+    if (compute) {
+	r = quota_write(&q, &tid);
+	if (r) goto done;
+
+	quota_commit(&tid);
+    }
 
 done:
     if (r && tid) quota_abort(&tid);
@@ -2650,11 +2700,24 @@ static int mboxlist_changequota(const char *name,
     int r = 0;
     struct mailbox *mailbox = NULL;
     const char *root = (const char *) rock;
+    int res;
+    uquota_t quota_usage[QUOTA_NUMRESOURCES];
+    quota_t quota_diff[QUOTA_NUMRESOURCES];
 
     assert(root);
 
     r = mailbox_open_iwl(name, &mailbox);
     if (r) goto done;
+
+    memset(quota_usage, 0, sizeof(quota_usage));
+    memset(quota_diff, 0, sizeof(quota_diff));
+
+    quota_usage[QUOTA_STORAGE] = mailbox->i.quota_mailbox_used;
+    quota_usage[QUOTA_MESSAGE] = mailbox->i.exists;
+    if (annotatemore_computequota(mailbox, &quota_usage[QUOTA_ANNOTSTORAGE])) {
+	r = IMAP_IOERROR;
+	goto done;
+    }
 
     if (mailbox->quotaroot) {
 	if (strlen(mailbox->quotaroot) >= strlen(root)) {
@@ -2663,8 +2726,11 @@ static int mboxlist_changequota(const char *name,
 	}
 
 	/* remove usage from the old quotaroot */
-	r = quota_update_used(mailbox->quotaroot, QUOTA_STORAGE,
-			 -mailbox->i.quota_mailbox_used);
+	for (res = 0; res < QUOTA_NUMRESOURCES ; res++) {
+	    /* XXX - check overflow ? */
+	    quota_diff[res] = -quota_usage[res];
+	}
+	r = quota_update_useds(mailbox->quotaroot, quota_diff);
 	if (r) {
 	    syslog(LOG_ERR,
 		   "LOSTQUOTA: unable to record free of " UQUOTA_T_FMT " bytes in quota %s",
@@ -2677,8 +2743,11 @@ static int mboxlist_changequota(const char *name,
     if (r) goto done;
 
     /* update the new quota root */
-    r = quota_update_used(root, QUOTA_STORAGE,
-		     mailbox->i.quota_mailbox_used);
+    for (res = 0; res < QUOTA_NUMRESOURCES ; res++) {
+	/* XXX - check overflow ? */
+	quota_diff[res] = quota_usage[res];
+    }
+    r = quota_update_useds(root, quota_diff);
 
  done:
     mailbox_close(&mailbox);
@@ -2686,6 +2755,52 @@ static int mboxlist_changequota(const char *name,
     if (r) {
 	syslog(LOG_ERR, "LOSTQUOTA: unable to change quota root for %s to %s: %s",
 	       name, root, error_message(r));
+    }
+
+    /* Note, we're a callback, and it's not a huge tragedy if we
+     * fail, so we don't ever return a failure */
+    return 0;
+}
+
+/*
+ * Helper function to compute the quota root for 'name'.
+ */
+static int mboxlist_computequota(const char *name,
+				 int matchlen __attribute__((unused)),
+				 int maycreate __attribute__((unused)),
+				 void *rock)
+{
+    int r = 0;
+    struct mailbox *mailbox = NULL;
+    struct computequota_rock *qrock = (struct computequota_rock *) rock;
+
+    r = mailbox_open_iwl(name, &mailbox);
+    if (r) goto done;
+
+    /* count this mailbox usage if it is associated to our quotaroot */
+    if (strcmpsafe(mailbox->quotaroot, qrock->quota->root)) {
+	goto done;
+    }
+
+    /* only compute requested resources; others usage shall not be updated */
+    if (qrock->compute[QUOTA_STORAGE]) {
+	qrock->quota->useds[QUOTA_STORAGE] += mailbox->i.quota_mailbox_used;
+    }
+    if (qrock->compute[QUOTA_MESSAGE]) {
+	qrock->quota->useds[QUOTA_MESSAGE] += mailbox->i.exists;
+    }
+    if (qrock->compute[QUOTA_ANNOTSTORAGE]) {
+	if (annotatemore_computequota(mailbox, &qrock->quota->useds[QUOTA_ANNOTSTORAGE])) {
+	    r = IMAP_IOERROR;
+	}
+    }
+
+ done:
+    mailbox_close(&mailbox);
+
+    if (r) {
+	syslog(LOG_ERR, "LOSTQUOTA: unable to recompute quota root for %s to %s: %s",
+	       name, qrock->quota->root, error_message(r));
     }
 
     /* Note, we're a callback, and it's not a huge tragedy if we

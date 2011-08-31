@@ -51,6 +51,7 @@
 #include "mboxname.h"
 #include "mboxlist.h"
 #include "prot.h"
+#include "quota.h"
 #include "util.h"
 #include "strarray.h"
 
@@ -131,6 +132,10 @@ typedef int (*annotatemore_find_proc_t)(const char *mailbox,
 /* 'proc'ess all annotations matching 'mailbox' and 'entry' */
 int annotatemore_findall(const char *mailbox, uint32_t uid, const char *entry,
 			 annotatemore_find_proc_t proc, void *rock);
+
+/* count quota usage for all annotations of mboxname */
+int annotatemore_computequota(struct mailbox *mailbox,
+			      uquota_t *quota_usage);
 
 /* fetch annotations and output results */
 typedef void (*annotate_fetch_cb_t)(const char *mboxname,
