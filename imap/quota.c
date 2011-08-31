@@ -104,7 +104,7 @@ struct quotaentry {
     char *allocname;
     int refcount;
     int deleted;
-    uquota_t newused;
+    uquota_t newused[QUOTA_NUMRESOURCES];
 };
 
 /* forward declarations */
@@ -376,8 +376,19 @@ static int fixquota_mailbox(void *rock __attribute__((unused)),
 	}
 
 	/* and track the total usage inside this root */
-	if (!r)
-	    quota[thisquota].newused += mailbox->i.quota_mailbox_used;
+	if (!r) {
+	    if (quota[thisquota].quota.sets[QUOTA_STORAGE]) {
+		quota[thisquota].newused[QUOTA_STORAGE] += mailbox->i.quota_mailbox_used;
+	    }
+	    if (quota[thisquota].quota.sets[QUOTA_MESSAGE]) {
+		quota[thisquota].newused[QUOTA_MESSAGE] += mailbox->i.exists;
+	    }
+	    if (quota[thisquota].quota.sets[QUOTA_ANNOTSTORAGE]) {
+		if (annotatemore_computequota(mailbox, &quota[thisquota].newused[QUOTA_ANNOTSTORAGE])) {
+		    r = IMAP_IOERROR;
+		}
+	    }
+	}
     }
 
 done:
@@ -407,6 +418,8 @@ int fixquota_fixroot(struct mailbox *mailbox,
  */
 int fixquota_finish(int thisquota)
 {
+    int res;
+    int changed = 0;
     int r = 0;
     struct txn *tid = NULL;
 
@@ -420,8 +433,15 @@ int fixquota_finish(int thisquota)
 	return r;
     }
 
+    for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	if (quota[thisquota].quota.sets[res] &&
+	    (quota[thisquota].quota.useds[res] != quota[thisquota].newused[res])) {
+	    changed = 1;
+	    break;
+	}
+    }
     /* nothing changed, all good */
-    if (quota[thisquota].quota.useds[QUOTA_STORAGE] == quota[thisquota].newused)
+    if (!changed)
 	return 0;
 
     /* re-read the quota with the record locked */
@@ -433,11 +453,32 @@ int fixquota_finish(int thisquota)
     }
 
     /* is it still different? */
-    if (quota[thisquota].quota.useds[QUOTA_STORAGE] != quota[thisquota].newused) {
-	printf("%s: usage was " UQUOTA_T_FMT ", now " UQUOTA_T_FMT "\n",
-	       quota[thisquota].quota.root,
-	       quota[thisquota].quota.useds[QUOTA_STORAGE], quota[thisquota].newused);
-	quota[thisquota].quota.useds[QUOTA_STORAGE] = quota[thisquota].newused;
+    changed = 0;
+    for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	if (quota[thisquota].quota.sets[res] &&
+	    (quota[thisquota].quota.useds[res] != quota[thisquota].newused[res])) {
+	    changed = 1;
+	    break;
+	}
+    }
+    if (changed) {
+	printf("%s: ", quota[thisquota].quota.root);
+	changed = 0;
+	for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	    if (!quota[thisquota].quota.sets[res] ||
+		(quota[thisquota].quota.useds[res] == quota[thisquota].newused[res])) {
+		continue;
+	    }
+
+	    if (changed) {
+		printf("; ");
+	    }
+	    changed = 1;
+	    printf("%s usage was " UQUOTA_T_FMT ", now " UQUOTA_T_FMT, quota_names[res],
+		quota[thisquota].quota.useds[res], quota[thisquota].newused[res]);
+	    quota[thisquota].quota.useds[res] = quota[thisquota].newused[res];
+	}
+	printf("\n");
 	r = quota_write(&quota[thisquota].quota, &tid);
 	if (r) {
 	    errmsg("failed writing quotaroot '%s'",
@@ -500,35 +541,46 @@ int fixquotas(char *domain, char **roots, int nroots)
     return r;
 }
 
+static void reportquota_resource(struct quota * quota, const char *root, int res)
+{
+	if (quota->limits[res] > 0) {
+	    printf(" %7" PRIdMAX " %8" PRIuMAX, (intmax_t)quota->limits[res],
+		(uintmax_t)((((uintmax_t)quota->useds[res] / quota_units[res])
+		* 100) / quota->limits[res]));
+	}
+	else if (quota->limits[res] == 0) {
+	    printf("       0         ");
+	}
+	else {
+	    printf("                 ");
+	}
+	printf(" %8" PRIuMAX " %20s %s\n",
+	    (uintmax_t)((uintmax_t)quota->useds[res] / quota_units[res]),
+	    quota_names[res], root);
+}
+
 /*
  * Print out the quota report
  */
 void reportquota(void)
 {
     int i;
+    int res;
     char buf[MAX_MAILBOX_PATH+1];
 
-    printf("   Quota   %% Used     Used Root\n");
+    printf("   Quota   %% Used     Used             Resource Root\n");
 
     for (i = 0; i < quota_num; i++) {
 	if (quota[i].deleted) continue;
-	if (quota[i].quota.limits[QUOTA_STORAGE] > 0) {
-	    printf(" %7d " QUOTA_REPORT_FMT ,
-		    quota[i].quota.limits[QUOTA_STORAGE],
-		   ((quota[i].quota.useds[QUOTA_STORAGE] / quota_units[QUOTA_STORAGE])
-		   * 100) / quota[i].quota.limits[QUOTA_STORAGE]);
-	}
-	else if (quota[i].quota.limits[QUOTA_STORAGE] == 0) {
-	    printf("       0        ");
-	}
-	else {
-	    printf("                ");
-	}
+
 	/* Convert internal name to external */
 	(*quota_namespace.mboxname_toexternal)(&quota_namespace,
 					       quota[i].quota.root,
 					       "cyrus", buf);
-	printf(" " QUOTA_REPORT_FMT " %s\n",
-	       quota[i].quota.useds[QUOTA_STORAGE] / quota_units[QUOTA_STORAGE], buf);
+	for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	    if (quota[i].quota.sets[res]) {
+		reportquota_resource(&quota[i].quota, buf, res);
+	    }
+	}
     }
 }
