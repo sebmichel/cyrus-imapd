@@ -75,17 +75,20 @@ static int quota_dbopen = 0;
 /* keywords used when storing fields in the new quota db format */
 static const char * const quota_db_names[QUOTA_NUMRESOURCES] = {
     NULL,	/* QUOTA_STORAGE */
+    "M",	/* QUOTA_MESSAGE */
     "AS"	/* QUOTA_ANNOTSTORAGE */
 };
 
 /* IMAP atoms for various quota resources */
 const char * const quota_names[QUOTA_NUMRESOURCES] = {
     "STORAGE",			/* QUOTA_STORAGE -- RFC2087 */
+    "MESSAGE",			/* QUOTA_MESSAGE -- RFC2087 */
     "X-ANNOTATION-STORAGE"	/* QUOTA_ANNOTSTORAGE */
 };
 
 const int quota_units[QUOTA_NUMRESOURCES] = {
     1024,		/* QUOTA_STORAGE -- RFC2087 */
+    1,			/* QUOTA_MESSAGE -- RFC2087 */
     1024		/* QUOTA_ANNOTSTORAGE */
 };
 
@@ -111,8 +114,10 @@ static void quota_init(struct quota *q)
     int res;
 
     memset(q, 0, sizeof(*q));
-    for (res = 0 ; res < QUOTA_NUMRESOURCES ; res++)
+    for (res = 0 ; res < QUOTA_NUMRESOURCES ; res++) {
 	q->limits[res] = QUOTA_UNLIMITED;
+	q->sets[res] = 0;
+    }
     q->root = root;
 }
 
@@ -138,6 +143,7 @@ static int quota_parseval(const char *data, struct quota *quota)
 	    goto out;
 	if (sscanf(fields->data[i++], "%d", &quota->limits[res]) != 1)
 	    goto out;
+	quota->sets[res] = 1;
 	if (i == fields->count)
 	    break;	/* successfully parsed whole line */
 
@@ -324,11 +330,15 @@ int quota_write(struct quota *quota, struct txn **tid)
 
     for (res = 0 ; res < QUOTA_NUMRESOURCES ; res++)
     {
+	if (!quota->sets[res]) continue;
 	if (quota_db_names[res])
 	    buf_printf(&buf, " %s ", quota_db_names[res]);
 	buf_printf(&buf, UQUOTA_T_FMT " %d",
 		   quota->useds[res], quota->limits[res]);
     }
+
+    /* sanity check */
+    if (!buf.len) return 0;
 
     r = QDB->store(qdb, quota->root, qrlen, buf_cstring(&buf), buf.len, tid);
 
@@ -352,7 +362,7 @@ int quota_write(struct quota *quota, struct txn **tid)
     return r;
 }
 
-int quota_update_used(const char *quotaroot, enum quota_resource res, quota_t diff)
+int quota_update_useds(const char *quotaroot, quota_t diff[QUOTA_NUMRESOURCES])
 {
     struct quota q;
     struct txn *tid = NULL;
@@ -365,7 +375,11 @@ int quota_update_used(const char *quotaroot, enum quota_resource res, quota_t di
     r = quota_read(&q, &tid, 1);
 
     if (!r) {
-	quota_use(&q, res, diff);
+	int res;
+
+	for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	    quota_use(&q, res, diff[res]);
+	}
 	r = quota_write(&q, &tid);
     }
 
