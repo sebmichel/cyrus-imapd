@@ -2701,7 +2701,7 @@ static int mboxlist_changequota(const char *name,
     struct mailbox *mailbox = NULL;
     const char *root = (const char *) rock;
     int res;
-    uquota_t quota_usage[QUOTA_NUMRESOURCES];
+    quota_t quota_usage[QUOTA_NUMRESOURCES];
     quota_t quota_diff[QUOTA_NUMRESOURCES];
 
     assert(root);
@@ -2727,7 +2727,6 @@ static int mboxlist_changequota(const char *name,
 
 	/* remove usage from the old quotaroot */
 	for (res = 0; res < QUOTA_NUMRESOURCES ; res++) {
-	    /* XXX - check overflow ? */
 	    quota_diff[res] = -quota_usage[res];
 	}
 	r = quota_update_useds(mailbox->quotaroot, quota_diff);
@@ -2744,7 +2743,6 @@ static int mboxlist_changequota(const char *name,
 
     /* update the new quota root */
     for (res = 0; res < QUOTA_NUMRESOURCES ; res++) {
-	/* XXX - check overflow ? */
 	quota_diff[res] = quota_usage[res];
     }
     r = quota_update_useds(root, quota_diff);

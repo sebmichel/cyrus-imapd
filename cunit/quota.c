@@ -396,7 +396,7 @@ static void test_update_useds(void)
     struct txn *txn = NULL;
     int res;
     quota_t quota_diff[QUOTA_NUMRESOURCES];
-    uquota_t usage_expected[QUOTA_NUMRESOURCES];
+    quota_t usage_expected[QUOTA_NUMRESOURCES];
     int r;
 
     memset(&q, 0, sizeof(q));

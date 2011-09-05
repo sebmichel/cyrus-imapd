@@ -135,7 +135,7 @@ int annotatemore_findall(const char *mailbox, uint32_t uid, const char *entry,
 
 /* count quota usage for all annotations of mboxname */
 int annotatemore_computequota(struct mailbox *mailbox,
-			      uquota_t *quota_usage);
+			      quota_t *quota_usage);
 
 /* fetch annotations and output results */
 typedef void (*annotate_fetch_cb_t)(const char *mboxname,

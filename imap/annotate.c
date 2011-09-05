@@ -958,7 +958,7 @@ struct computequota_rock {
     struct mailbox *mailbox;
     struct seqset *seq;
     annotate_db_t *d;
-    uquota_t quota_usage;
+    quota_t quota_usage;
 };
 
 static int computequota_cb(void *rock, const char *key, int keylen,
@@ -996,7 +996,7 @@ static int computequota_cb(void *rock, const char *key, int keylen,
 }
 
 int annotatemore_computequota(struct mailbox *mailbox,
-			      uquota_t *quota_usage)
+			      quota_t *quota_usage)
 {
     char key[MAX_MAILBOX_PATH+1], *p;
     int keylen, r;

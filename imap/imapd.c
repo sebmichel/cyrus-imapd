@@ -3894,9 +3894,9 @@ void cmd_select(char *tag, char *cmd, char *name)
 	    }
 
 	    if ((warncount <= 0) || (warncount >= q.limits[QUOTA_MESSAGE]) ||
-		((uquota_t) (q.limits[QUOTA_MESSAGE] - warnsize)) * quota_units[QUOTA_MESSAGE] < q.useds[QUOTA_MESSAGE]) {
+		((quota_t) (q.limits[QUOTA_MESSAGE] - warnsize)) * quota_units[QUOTA_MESSAGE] < q.useds[QUOTA_MESSAGE]) {
 		usage = ((double) q.useds[QUOTA_MESSAGE] * 100.0) /
-			(double) ((uquota_t) q.limits[QUOTA_MESSAGE] * quota_units[QUOTA_MESSAGE]);
+			(double) ((quota_t) q.limits[QUOTA_MESSAGE] * quota_units[QUOTA_MESSAGE]);
 		if (usage >= 100.0) {
 		    if (!overquota) {
 			prot_printf(imapd_out, "* NO [ALERT] %s\r\n",
