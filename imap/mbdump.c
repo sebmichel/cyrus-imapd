@@ -1169,12 +1169,6 @@ int undump_mailbox(const char *mbname,
 	    quota_diff[QUOTA_MESSAGE] = mailbox->i.exists - old_quotamessage_used;
 
 	    r = quota_update_useds(mailbox->quotaroot, quota_diff);
-	    if (r) {
-		syslog(LOG_ERR, "LOSTQUOTA: unable to record add of " 
-		       QUOTA_T_FMT " bytes and " QUOTA_T_FMT " messages in quota %s",
-		       quota_diff[QUOTA_STORAGE], quota_diff[QUOTA_MESSAGE],
-		       mailbox->quotaroot);
-	    }
 	}
 
 	for (recno = 1; recno <= mailbox->i.num_records; recno++) {

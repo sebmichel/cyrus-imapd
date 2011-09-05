@@ -1940,11 +1940,7 @@ int mailbox_commit_quota(struct mailbox *mailbox)
     assert(mailbox_index_islocked(mailbox, 1));
 
     r = quota_update_useds(mailbox->quotaroot, quota_diff);
-    if (r) {
-	/* XXX - fail here?  It's tempting */
-	syslog(LOG_ERR, "LOSTQUOTA: unable to record quota file %s",
-	       mailbox->quotaroot);
-    }
+    /* XXX - fail upon issue?  It's tempting */
 
     return 0;
 }

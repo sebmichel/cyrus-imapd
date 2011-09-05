@@ -338,7 +338,10 @@ int quota_write(struct quota *quota, struct txn **tid)
     }
 
     /* sanity check */
-    if (!buf.len) return 0;
+    if (!buf.len) {
+	r = 0;
+	goto out;
+    }
 
     r = QDB->store(qdb, quota->root, qrlen, buf_cstring(&buf), buf.len, tid);
 
@@ -358,6 +361,7 @@ int quota_write(struct quota *quota, struct txn **tid)
 	break;
     }
 
+out:
     buf_free(&buf);
     return r;
 }
@@ -385,10 +389,19 @@ int quota_update_useds(const char *quotaroot, quota_t diff[QUOTA_NUMRESOURCES])
 
     if (r) {
 	quota_abort(&tid);
-	return r;
+	goto out;
     }
     quota_commit(&tid);
-    return 0;
+
+out:
+    if (r) {
+	syslog(LOG_ERR, "LOSTQUOTA: unable to record change of "
+	       QUOTA_T_FMT " bytes and " QUOTA_T_FMT " messages in quota %s",
+	       diff[QUOTA_STORAGE], diff[QUOTA_MESSAGE],
+	       quotaroot);
+    }
+
+    return r;
 }
 
 /*

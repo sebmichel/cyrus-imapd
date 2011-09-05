@@ -2730,11 +2730,6 @@ static int mboxlist_changequota(const char *name,
 	    quota_diff[res] = -quota_usage[res];
 	}
 	r = quota_update_useds(mailbox->quotaroot, quota_diff);
-	if (r) {
-	    syslog(LOG_ERR,
-		   "LOSTQUOTA: unable to record free of " QUOTA_T_FMT " bytes in quota %s",
-		   mailbox->i.quota_mailbox_used, mailbox->quotaroot);
-	}
     }
 
     /* update (or set) the quotaroot */
