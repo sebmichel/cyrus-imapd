@@ -104,7 +104,7 @@ struct quotaentry {
     char *allocname;
     int refcount;
     int deleted;
-    uquota_t newused[QUOTA_NUMRESOURCES];
+    quota_t newused[QUOTA_NUMRESOURCES];
 };
 
 /* forward declarations */
@@ -474,7 +474,7 @@ int fixquota_finish(int thisquota)
 		printf("; ");
 	    }
 	    changed = 1;
-	    printf("%s usage was " UQUOTA_T_FMT ", now " UQUOTA_T_FMT, quota_names[res],
+	    printf("%s usage was " QUOTA_T_FMT ", now " QUOTA_T_FMT, quota_names[res],
 		quota[thisquota].quota.useds[res], quota[thisquota].newused[res]);
 	    quota[thisquota].quota.useds[res] = quota[thisquota].newused[res];
 	}
