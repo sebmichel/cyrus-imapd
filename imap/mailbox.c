@@ -1917,7 +1917,8 @@ int mailbox_commit_quota(struct mailbox *mailbox)
 {
     int r;
     int res;
-    quota_t quota_diff[QUOTA_NUMRESOURCES];
+    int changed;
+    quota_t quota_usage[QUOTA_NUMRESOURCES];
 
     /* not dirty */
     if (!mailbox->quota_dirty)
@@ -1925,26 +1926,24 @@ int mailbox_commit_quota(struct mailbox *mailbox)
 
     mailbox->quota_dirty = 0;
 
-    memset(quota_diff, 0, sizeof(quota_diff));
-
-    /* unchanged */
-    if (!(mailbox->i.options & OPT_MAILBOX_DELETED)) {
-	quota_diff[QUOTA_STORAGE] = mailbox->i.quota_mailbox_used;
-	quota_diff[QUOTA_MESSAGE] = mailbox->i.exists;
-    }
-    /* else: mailbox is being deleted, thus its new usage is 0 */
-    quota_diff[QUOTA_STORAGE] -= mailbox->quotastorage_previously_used;
-    quota_diff[QUOTA_MESSAGE] -= mailbox->quotamessage_previously_used;
-    if (!quota_diff[QUOTA_STORAGE] && !quota_diff[QUOTA_MESSAGE])
-	return 0;
-
     /* no quota root means we don't track quota.  That's OK */
     if (!mailbox->quotaroot)
 	return 0;
 
+    mailbox_get_usage(mailbox, quota_usage);
+    for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	quota_usage[res] -= mailbox->quota_previously_used[res];
+	if (quota_usage[res] != 0) {
+	    changed++;
+	}
+    }
+    /* unchanged */
+    if (!changed)
+	return 0;
+
     assert(mailbox_index_islocked(mailbox, 1));
 
-    r = quota_update_useds(mailbox->quotaroot, quota_diff);
+    r = quota_update_useds(mailbox->quotaroot, quota_usage);
     /* XXX - fail upon issue?  It's tempting */
 
     return 0;
@@ -2041,8 +2040,9 @@ static void mailbox_quota_dirty(struct mailbox *mailbox)
     /* track quota use */
     if (!mailbox->quota_dirty) {
 	mailbox->quota_dirty = 1;
-	mailbox->quotastorage_previously_used = mailbox->i.quota_mailbox_used;
-	mailbox->quotamessage_previously_used = mailbox->i.exists;
+	memset(mailbox->quota_previously_used, 0, sizeof(mailbox->quota_previously_used));
+	mailbox->quota_previously_used[QUOTA_STORAGE] = mailbox->i.quota_mailbox_used;
+	mailbox->quota_previously_used[QUOTA_MESSAGE] = mailbox->i.exists;
     }
 }
 
@@ -3392,8 +3392,7 @@ int mailbox_rename_copy(struct mailbox *oldmailbox,
     /* mark the "used" back to zero, so it updates the new quota! */
     mailbox_set_quotaroot(newmailbox, newquotaroot);
     mailbox_quota_dirty(newmailbox);
-    newmailbox->quotastorage_previously_used = 0;
-    newmailbox->quotamessage_previously_used = 0;
+    memset(newmailbox->quota_previously_used, 0, sizeof(newmailbox->quota_previously_used));
 
     /* commit the index changes */
     r = mailbox_commit(newmailbox);
@@ -4431,7 +4430,7 @@ close:
 }
 
 /*
- * Check whether we can add @delta bytes to the mailbox
+ * Check whether we can add data to the mailbox
  * without exceeding the quota limit.
  * Returns: 0 if allowed, or IMAP error code.
  */
@@ -4461,6 +4460,26 @@ int mailbox_quota_check(struct mailbox *mailbox,
     if (r)
 	return r;
     return quota_check(&q, QUOTA_MESSAGE, deltamessage);
+}
+
+/*
+ * Gets messages usage.
+ */
+void mailbox_get_usage(struct mailbox *mailbox,
+			quota_t usage[QUOTA_NUMRESOURCES])
+{
+    int res;
+
+    for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	usage[res] = 0;
+    }
+
+    if (!(mailbox->i.options & OPT_MAILBOX_DELETED)) {
+	usage[QUOTA_STORAGE] = mailbox->i.quota_mailbox_used;
+	usage[QUOTA_MESSAGE] = mailbox->i.exists;
+	/* XXX - track other resources too ? */
+    }
+    /* else: mailbox is being deleted, thus its new usage is 0 */
 }
 
 /*

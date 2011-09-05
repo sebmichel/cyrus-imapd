@@ -2702,24 +2702,21 @@ static int mboxlist_changequota(const char *name,
     const char *root = (const char *) rock;
     int res;
     quota_t quota_usage[QUOTA_NUMRESOURCES];
-    quota_t quota_diff[QUOTA_NUMRESOURCES];
 
     assert(root);
 
     r = mailbox_open_iwl(name, &mailbox);
     if (r) goto done;
 
-    memset(quota_usage, 0, sizeof(quota_usage));
-    memset(quota_diff, 0, sizeof(quota_diff));
-
-    quota_usage[QUOTA_STORAGE] = mailbox->i.quota_mailbox_used;
-    quota_usage[QUOTA_MESSAGE] = mailbox->i.exists;
+    mailbox_get_usage(mailbox, quota_usage);
     if (annotatemore_computequota(mailbox, &quota_usage[QUOTA_ANNOTSTORAGE])) {
 	r = IMAP_IOERROR;
 	goto done;
     }
 
     if (mailbox->quotaroot) {
+	quota_t quota_diff[QUOTA_NUMRESOURCES];
+
 	if (strlen(mailbox->quotaroot) >= strlen(root)) {
 	    /* Part of a child quota root - skip */
 	    goto done;
@@ -2737,10 +2734,7 @@ static int mboxlist_changequota(const char *name,
     if (r) goto done;
 
     /* update the new quota root */
-    for (res = 0; res < QUOTA_NUMRESOURCES ; res++) {
-	quota_diff[res] = quota_usage[res];
-    }
-    r = quota_update_useds(root, quota_diff);
+    r = quota_update_useds(root, quota_usage);
 
  done:
     mailbox_close(&mailbox);
