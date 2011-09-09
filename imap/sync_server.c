@@ -1852,6 +1852,7 @@ static int do_annotation(struct dlist *kin)
     struct buf value = BUF_INITIALIZER;
     const char *userid = NULL;
     char *name = NULL;
+    struct mailbox *mailbox = NULL;
     annotate_state_t *astate = NULL;
     int r;
 
@@ -1870,6 +1871,10 @@ static int do_annotation(struct dlist *kin)
     name = xstrdup(mboxname);
     mboxname_hiersep_toexternal(sync_namespacep, name, 0);
 
+    r = mailbox_open_iwl(name, &mailbox);
+    if (r)
+	goto done;
+
     appendattvalue(&attvalues,
 		   *userid ? "value.priv" : "value.shared",
 		   &value);
@@ -1877,7 +1882,7 @@ static int do_annotation(struct dlist *kin)
     astate = annotate_state_new();
     annotate_state_set_auth(astate, sync_namespacep,
 			    sync_userisadmin, userid, sync_authstate);
-    annotate_state_set_mailbox(astate, name);
+    annotate_state_set_mailbox(astate, mailbox);
 
     r = annotatemore_begin();
     if (!r)
@@ -1885,6 +1890,8 @@ static int do_annotation(struct dlist *kin)
     if (!r)
 	annotatemore_commit();
 
+done:
+    mailbox_close(&mailbox);
     freeentryatts(entryatts);
     free(name);
     annotate_state_free(&astate);
@@ -1901,6 +1908,7 @@ static int do_unannotation(struct dlist *kin)
     const char *userid = NULL;
     struct buf empty = BUF_INITIALIZER;
     char *name = NULL;
+    struct mailbox *mailbox = NULL;
     annotate_state_t *astate = NULL;
     int r;
 
@@ -1916,6 +1924,10 @@ static int do_unannotation(struct dlist *kin)
     name = xstrdup(mboxname);
     mboxname_hiersep_toexternal(sync_namespacep, name, 0);
 
+    r = mailbox_open_iwl(name, &mailbox);
+    if (r)
+	goto done;
+
     appendattvalue(&attvalues,
 		   *userid ? "value.priv" : "value.shared",
 		   &empty);
@@ -1923,7 +1935,7 @@ static int do_unannotation(struct dlist *kin)
     astate = annotate_state_new();
     annotate_state_set_auth(astate, sync_namespacep,
 			    sync_userisadmin, userid, sync_authstate);
-    annotate_state_set_mailbox(astate, name);
+    annotate_state_set_mailbox(astate, mailbox);
 
     r = annotatemore_begin();
     if (!r)
@@ -1931,6 +1943,8 @@ static int do_unannotation(struct dlist *kin)
     if (!r)
 	annotatemore_commit();
 
+done:
+    mailbox_close(&mailbox);
     freeentryatts(entryatts);
     free(name);
 
