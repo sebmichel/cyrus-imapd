@@ -4492,7 +4492,7 @@ void mailbox_get_usage(struct mailbox *mailbox,
     if (!(mailbox->i.options & OPT_MAILBOX_DELETED)) {
 	usage[QUOTA_STORAGE] = mailbox->i.quota_mailbox_used;
 	usage[QUOTA_MESSAGE] = mailbox->i.exists;
-	/* XXX - annotation usage */
+	usage[QUOTA_ANNOTSTORAGE] = mailbox->i.quota_annot_used;
     }
     /* else: mailbox is being deleted, thus its new usage is 0 */
 }
