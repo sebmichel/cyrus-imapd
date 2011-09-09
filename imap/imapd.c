@@ -7475,7 +7475,6 @@ void cmd_setquota(const char *tag, const char *quotaroot)
     int c;
     int force = 0;
     static struct buf arg;
-    char *p;
     int r;
     char mailboxname[MAX_MAILBOX_BUFFER];
     struct mboxlist_entry *mbentry = NULL;
