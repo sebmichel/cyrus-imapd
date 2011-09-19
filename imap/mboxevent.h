@@ -46,80 +46,93 @@
 #define _MBOXEVENT_H
 
 #include "hash.h"
+#include "imapurl.h"
 #include "strarray.h"
 #include "util.h"
+
 #include "mailbox.h"
 
-
-enum {
-    EVENT_INIT = 0,
-    EVENT_READY,
-    EVENT_PENDING,
-    EVENT_ABORTING
-};
 
 /*
  * event types defined in RFC 5423 - Internet Message Store Events
  */
-enum {
-    // Message Addition and Deletion
+enum  {
+    /* Message Addition and Deletion */
     MessageAppend = 1,
+    MessageExpire,
     MessageExpunge,
     MessageNew,
     vnd_cmu_MessageCopy, /* additional event type to notify IMAP COPY */
-    // Message Flags
+    /* Message Flags */
     MessageRead,
     MessageTrash,
     FlagsSet,
     FlagsClear,
-    // Mailbox Management
+    /* Mailbox Management */
     MailboxCreate,
     MailboxDelete,
     MailboxRename
 };
 
-/*
- * extra event parameters than those mandatory in the RFC 5423
- */
+/* order event parameters for easy parsing */
 enum {
-    event_flagnames =            (1<<0),
-    event_messages =             (1<<1),
-    event_timestamp =            (1<<2),
-    event_uidnext =              (1<<3),
-    event_vnd_cmu_host =         (1<<4),
-    event_vnd_cmu_midset =       (1<<5),
-    event_vnd_cmu_newMessages =  (1<<6),
-    event_vnd_cmu_oldUidset =    (1<<7)
+    event_vnd_cmu_host_idx = 0,
+    event_timestamp_idx,
+    event_oldMailboxID_idx,
+    event_vnd_cmu_oldUidset_idx,
+    event_mailboxID_idx,
+    event_messages_idx,
+    event_vnd_cmu_newMessages_idx,
+    event_uidnext_idx,
+    event_uidset_idx,
+    event_vnd_cmu_midset_idx,
+    event_flagNames_idx,
 };
 
-struct event_state {
-    unsigned long state;
+/*
+ * event parameters defined in RFC 5423 - Internet Message Store Events
+ */
+enum event_param {
+    event_mailboxID =            (1<<event_mailboxID_idx),
+    event_oldMailboxID =         (1<<event_oldMailboxID_idx),
+    /* extra event parameters optional in the RFC */
+    event_flagNames =            (1<<event_flagNames_idx),
+    event_messages =             (1<<event_messages_idx),
+    event_timestamp =            (1<<event_timestamp_idx),
+    event_uidnext =              (1<<event_uidnext_idx),
+    event_uidset =               (1<<event_uidset_idx),
+    /* extra event parameters not defined in the RFC */
+    event_vnd_cmu_host =         (1<<event_vnd_cmu_host_idx),
+    event_vnd_cmu_midset =       (1<<event_vnd_cmu_midset_idx),
+    event_vnd_cmu_newMessages =  (1<<event_vnd_cmu_newMessages_idx),
+    event_vnd_cmu_oldUidset =    (1<<event_vnd_cmu_oldUidset_idx)
+};
 
-    /* event type */
-    int type;
+/* event_state structure is a chained list to handle several events */
+struct event_state {
+    int type;			/* event type */
+    int aborting;		/* don't send the notification */
 
     /* standard event parameters */
-    char *mailbox; /* XXX translate mailbox name to external ? */
-    uint32_t uidvalidity;
+    struct imapurl *mailboxid; 	/* XXX translate mailbox name to external ? */
+    struct imapurl *oldmailboxid;
 
-    struct timeval timestamp;
-    uint32_t uidnext;
-    uint32_t messages;
-    struct buf uidset;
-    char *oldmailboxid;
     strarray_t flagnames;
+    char messages[21];
+    struct timeval timestamp;
+    char uidnext[21];
+    struct buf uidset;
 
     /* private event parameters */
     struct buf midset;
-    unsigned newMessages;
+    char newmessages[21];
+    struct buf olduidset;
 
-    /* enabled extra parameters */
-    int extraparams;
+    /* formatted representation of event parameters */
+    const char *params[event_flagNames_idx+1];
+
+    struct event_state *next;
 };
-
-#define EVENT_STATE_INITIALIZER	{ EVENT_INIT, 0, NULL, 0, { 0, 0 }, 0, 0, \
-				  BUF_INITIALIZER, NULL, STRARRAY_INITIALIZER, \
-				  BUF_INITIALIZER, 0, 0 }
 
 
 /*
@@ -128,70 +141,82 @@ struct event_state {
 void mboxevent_init(void);
 
 /*
- * Configure the event state structure for the given event type.
+ * Create a new event state structure for the given event type.
  * Allocate resources for configured extra parameters.
  *
- * set event_state state to EVENT_READY if notification is enabled
- * for the given type and is successfully initialized
- *
- * return the initialized event state or NULL otherwise
+ * return the initialized event state or NULL if notification is disabled
  */
-struct event_state *event_newstate(int type, struct event_state *event);
-
-/*
- * Abort the notification and release any allocated resources
- */
-void mboxevent_abort(struct event_state *event);
-
-/*
- * Test if given event is enabled for this folder.
- * By default subfolders are disabled for all events.
- */
-int mboxevent_enabled_for_folder(const char *event, const char *folder);
+struct event_state *event_newstate(int type, struct event_state **event);
 
 /*
  * Send a notification for this event and release any allocated resources
+ * But don't send notification is event->aborting is true
  */
-void mboxevent_notify(struct event_state *event);
+void mboxevent_notify(struct event_state **event);
 
 /*
- * Add this set of system flags to fill flagNames parameter.
- * Exclude system flags present in event_ignored_flags setting.
+ * Test if the given parameter must be filled for the given event type
  */
-void mboxevent_add_sysflags(struct event_state *event, bit32 sysflags);
+int mboxevent_expected_params(int event_type, enum event_param param);
 
 /*
- * Add this set of user flags to fill flagNames parameter.
- * Exclude user flags present in event_ignored_flags setting.
+ * Add this set of system flags to flagNames parameter.
+ * Exclude system flags present in event_exclude_flags setting.
+ *
+ * Return the total number of flags added until now
  */
-void mboxevent_add_usrflags(struct event_state *event, struct mailbox *mailbox,
+int mboxevent_add_sysflags(struct event_state *event, bit32 sysflags);
+
+/*
+ * Add this set of user flags to flagNames parameter.
+ * Exclude user flags present in event_exclude_flags setting.
+ *
+ * Return the total number of flags added until now
+ */
+int mboxevent_add_usrflags(struct event_state *event, struct mailbox *mailbox,
 			   bit32 *usrflags);
+
 /*
- * Extract data from given record to fill these event parameters :
+ * Add the given flag to flagNames parameter.
+ * event_exclude_flags doesn't apply here
+ */
+void mboxevent_add_flag(struct event_state *event, const char *flag);
+
+/*
+ * Extract data from the given record to fill these event parameters :
  * - uidset from UID
  * - midset from Message-Id in ENVELOPE structure
  *
- * Called once per message that has changed
+ * Called once per message and always before mboxevent_extract_mailbox
  */
 void mboxevent_extract_record(struct event_state *event, struct mailbox *mailbox,
 			 struct index_record *record);
 
 /*
- * Extract data from given mailbox to fill these event parameters :
- * - mailboxID
+ * Fill event parameter about the copied message.
+ * Called once per message and always before mboxevent_extract_mailbox
+ */
+void mboxevent_extract_copied_record(struct event_state *event,
+				     struct mailbox *mailbox, uint32_t uid);
+/*
+ * Extract data from the given mailbox to fill mailboxID event parameter and
+ * optionally these ones depending the type of the event:
  * - messages
  * - uidnext
  * - vnd.cmu.newMessages
  *
- * Called once per event.
+ * Must be called once per event or the notification will failed (Except for
+ * Login and Logout events)
  * Mailbox must be locked to count the number of \Seen flags
+ *
+ * It is necessary to call this function after all changes on mailbox to get the
+ * right values of messages, uidnext and vnd.cmu.newMessages event parameters
  */
 void mboxevent_extract_mailbox(struct event_state *event, struct mailbox *mailbox);
 
 /*
- * Return an IMAP URL that identify the given mailbox on the server.
- * UID is added to the URL to identify a message if not zero
+ * Return an IMAP URL that identify the given mailbox on the server
  */
-char *mboxevent_toURL(struct mailbox *mailbox);
+struct imapurl *mboxevent_toURL(struct mailbox *mailbox);
 
 #endif /* _MBOXEVENT_H */

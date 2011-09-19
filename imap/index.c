@@ -282,7 +282,7 @@ EXPORTED int index_expunge(struct index_state *state, char *sequence,
     /* XXX - earlier list if the sequence names UIDs that don't exist? */
     seq = _parse_sequence(state, sequence, 1);
 
-    event_newstate(MessageExpunge, state->eventstate);
+    event_newstate(MessageExpunge, &state->eventstate);
 
     for (msgno = 1; msgno <= state->exists; msgno++) {
 	im = &state->map[msgno-1];
@@ -311,22 +311,15 @@ EXPORTED int index_expunge(struct index_state *state, char *sequence,
 
 	if (r) break;
 
-	/* notify "immediate", "default" and "delayed" expunge */
-	if (state->eventstate->state) {
-	    mboxevent_extract_record(state->eventstate, state->mailbox, &im->record);
-	    state->eventstate->state = EVENT_PENDING;
-	}
+	mboxevent_extract_record(state->eventstate, state->mailbox, &im->record);
     }
 
     seqset_free(seq);
 
-    /* send MessageExpunge event notification */
-    if (state->eventstate->state == EVENT_PENDING) {
-	mboxevent_extract_mailbox(state->eventstate, state->mailbox);
-	mboxevent_notify(state->eventstate);
-    }
-    else
-	mboxevent_abort(state->eventstate);
+    /* send the MessageExpunge event notification for "immediate", "default"
+     * and "delayed" expunge */
+    mboxevent_extract_mailbox(state->eventstate, state->mailbox);
+    mboxevent_notify(&state->eventstate);
 
     /* unlock before responding */
     index_unlock(state);
@@ -846,10 +839,7 @@ static int _fetch_setseen(struct index_state *state, uint32_t msgno)
     state->seen_dirty = 1;
     im->isseen = 1;
 
-    if (state->eventstate->state) {
-	mboxevent_extract_record(state->eventstate, state->mailbox, &im->record);
-	state->eventstate->state = EVENT_PENDING;
-    }
+    mboxevent_extract_record(state->eventstate, state->mailbox, &im->record);
 
     /* RFC2060 says:
      * The \Seen flag is implicitly set; if this causes
@@ -945,7 +935,7 @@ EXPORTED int index_fetch(struct index_state *state,
 
     /* set the \Seen flag if necessary - while we still have the lock */
     if (fetchargs->fetchitems & FETCH_SETSEEN && !state->examining) {
-	event_newstate(MessageRead, state->eventstate);
+	event_newstate(MessageRead, &state->eventstate);
 
 	for (msgno = 1; msgno <= state->exists; msgno++) {
 	    im = &state->map[msgno-1];
@@ -956,13 +946,9 @@ EXPORTED int index_fetch(struct index_state *state,
 	    if (r) break;
 	}
 
-	if (state->eventstate->state == EVENT_PENDING) {
-	    mboxevent_extract_mailbox(state->eventstate, state->mailbox);
-	    mboxevent_notify(state->eventstate);
-	}
-	else
-	    mboxevent_abort(state->eventstate);
-
+	/* send the MessageRead event notification */
+	mboxevent_extract_mailbox(state->eventstate, state->mailbox);
+	mboxevent_notify(&state->eventstate);
     }
 
     if (fetchargs->vanished) {
@@ -1010,6 +996,7 @@ EXPORTED int index_store(struct index_state *state, char *sequence,
     struct seqset *seq;
     struct index_map *im;
     const strarray_t *flags = &storeargs->flags;
+    struct event_state *flagsset_state, *flagsclear_state;
 
     /* First pass at checking permission */
     if ((storeargs->seen && !(state->myrights & ACL_SETSEEN)) ||
@@ -1033,8 +1020,8 @@ EXPORTED int index_store(struct index_state *state, char *sequence,
 
     storeargs->update_time = time((time_t *)0);
 
-    event_newstate(FlagsSet, &state->eventstate[EVENT_FLAGSSET]);
-    event_newstate(FlagsClear, &state->eventstate[EVENT_FLAGSCLEAR]);
+    flagsset_state = event_newstate(FlagsSet, &state->eventstate);
+    flagsclear_state = event_newstate(FlagsClear, &state->eventstate);
 
     for (msgno = 1; msgno <= state->exists; msgno++) {
 	im = &state->map[msgno-1];
@@ -1077,15 +1064,12 @@ EXPORTED int index_store(struct index_state *state, char *sequence,
 	if (r) goto out;
     }
 
-    /* send pending event notifications */
-    for (i = 0; i < 2; i++) {
-	if (state->eventstate[i].state == EVENT_PENDING) {
-	    mboxevent_extract_mailbox(&state->eventstate[i], state->mailbox);
-	    mboxevent_notify(&state->eventstate[i]);
-	}
-	else
-	    mboxevent_abort(&state->eventstate[i]);
-    }
+    /* send the pending FlagsSet and FlagsRead event notifications */
+    /* let mboxevent_notify differentiate MessageRead, MessageTrash
+     * and FlagsSet events */
+    mboxevent_extract_mailbox(flagsset_state, state->mailbox);
+    mboxevent_extract_mailbox(flagsclear_state, state->mailbox);
+    mboxevent_notify(&state->eventstate);
 
 out:
     if (storeargs->operation == STORE_ANNOTATION && r)
@@ -3278,44 +3262,35 @@ static int index_storeflag(struct index_state *state, uint32_t msgno,
      * only the result is useful for event notification */
 
     /* XXX event notification could be improved here even if the RFC is vague.
-     * we try to keep the code simple with the drawback that for some cases
-     * we will send false positive FlagsSet and false negative FlagsClear */
+     * we try to keep the code simple with the drawback that for some uncommon
+     * cases we will send false positive FlagsSet and false negative FlagsClear */
 
     /* some flags are added */
-    if (state->eventstate[EVENT_FLAGSSET].state) {
+    if (state->eventstate) {
+	struct event_state *flagsset_state = state->eventstate;
+
 	memset(newusr, 0, sizeof(newusr));
 	for (i = 0; i < (MAX_USER_FLAGS/32); i++) {
 	    newusr[i] |= (~oldusr[i] & im->record.user_flags[i]);
 	}
-	mboxevent_add_usrflags(&state->eventstate[EVENT_FLAGSSET],
-			       state->mailbox, newusr);
-	mboxevent_add_sysflags(&state->eventstate[EVENT_FLAGSSET],
-			       ~old & im->record.system_flags);
 
-	if (strarray_size(&state->eventstate[EVENT_FLAGSSET].flagnames)) {
-	    /* don't differentiate MessageRead, MessageTrash and FlagsSet here */
-	    mboxevent_extract_record(&state->eventstate[EVENT_FLAGSSET],
-				     state->mailbox, &im->record);
-	    state->eventstate[EVENT_FLAGSSET].state = EVENT_PENDING;
-	}
+	if (mboxevent_add_sysflags(flagsset_state, ~old & im->record.system_flags)|
+	    mboxevent_add_usrflags(flagsset_state, state->mailbox, newusr))
+	    mboxevent_extract_record(flagsset_state, state->mailbox, &im->record);
     }
 
     /* some flags are removed */
-    if (state->eventstate[EVENT_FLAGSCLEAR].state) {
+    if (state->eventstate) {
+	struct event_state *flagsclear_state = state->eventstate->next;
+
 	memset(newusr, 0, sizeof(newusr));
 	for (i = 0; i < (MAX_USER_FLAGS/32); i++) {
 	    newusr[i] |= (oldusr[i] & ~im->record.user_flags[i]);
 	}
-	mboxevent_add_usrflags(&state->eventstate[EVENT_FLAGSCLEAR],
-			       state->mailbox, newusr);
-	mboxevent_add_sysflags(&state->eventstate[EVENT_FLAGSCLEAR],
-				       old & ~im->record.system_flags);
 
-	if (strarray_size(&state->eventstate[EVENT_FLAGSCLEAR].flagnames)) {
-	    mboxevent_extract_record(&state->eventstate[EVENT_FLAGSCLEAR],
-				     state->mailbox, &im->record);
-	    state->eventstate[EVENT_FLAGSCLEAR].state = EVENT_PENDING;
-	}
+	if (mboxevent_add_sysflags(flagsclear_state, old & ~im->record.system_flags)|
+	    mboxevent_add_usrflags(flagsclear_state, state->mailbox, newusr))
+	    mboxevent_extract_record(flagsclear_state, state->mailbox, &im->record);
     }
 
     return 0;

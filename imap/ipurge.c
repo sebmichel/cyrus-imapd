@@ -188,6 +188,9 @@ int main (int argc, char *argv[]) {
 
   sync_log_init();
 
+  /* setup for mailbox event notifications */
+  mboxevent_init();
+
   if (optind == argc) { /* do the whole partition */
     strcpy(buf, "*");
     (*purge_namespace.mboxlist_findall)(&purge_namespace, buf, 1, 0, 0,
@@ -263,7 +266,7 @@ static int purge_me(char *name, int matchlen __attribute__((unused)),
     return r;
   }
 
-  mailbox_expunge(mailbox, purge_check, &stats, NULL);
+  mailbox_expunge(mailbox, purge_check, &stats, NULL, MessageExpunge);
 
   mailbox_close(&mailbox);
 

@@ -770,10 +770,7 @@ EXPORTED int mboxlist_createmailbox(const char *name, int mbtype,
 				    forceuser, dbonly, &mailbox, extargs);
 
     if (!r) {
-	if (event_state && event_state->state) {
-	    mboxevent_extract_mailbox(event_state, mailbox);
-	    event_state->state = EVENT_PENDING;
-	}
+	mboxevent_extract_mailbox(event_state, mailbox);
 	mailbox_close(&mailbox);
     }
     return r;
@@ -1085,11 +1082,10 @@ EXPORTED int mboxlist_deletemailbox(const char *name, int isadmin,
 	mboxevent_extract_mailbox(event_state, mailbox);
 	r = mailbox_delete(&mailbox);
 
-	/* ready to notify the deletion of the mailbox */
-	if (event_state && event_state->state)
-	    if (!r) {
-		event_state->state = EVENT_PENDING;
-	    }
+	/* abort event notification */
+	if (r && event_state)
+	    event_state->aborting = 1;
+
     }
 
  done:
@@ -1315,7 +1311,8 @@ EXPORTED int mboxlist_renamemailbox(const char *oldname, const char *newname,
 	mailbox_close(&oldmailbox);
     } else {
 	if (newmailbox) {
-	    if (event_state && event_state->state) {
+	    /* prepare the event notification */
+	    if (event_state) {
 		/* case of delayed delete */
 		if (event_state->type == MailboxDelete)
 		    mboxevent_extract_mailbox(event_state, oldmailbox);
@@ -1323,7 +1320,6 @@ EXPORTED int mboxlist_renamemailbox(const char *oldname, const char *newname,
 		    mboxevent_extract_mailbox(event_state, newmailbox);
 		    event_state->oldmailboxid = mboxevent_toURL(oldmailbox);
 		}
-		event_state->state = EVENT_PENDING;
 	    }
 
 	    mailbox_rename_cleanup(&oldmailbox, isusermbox);

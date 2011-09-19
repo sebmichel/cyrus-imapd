@@ -285,6 +285,9 @@ int main (int argc, char *argv[]) {
 
     sync_log_init();
 
+    /* setup for mailbox event notifications */
+    mboxevent_init();
+
     if (optind == argc) { /* do the whole partition */
 	strcpy(buf, "*");
 	(*scan_namespace.mboxlist_findall)(&scan_namespace, buf, 1, 0, 0,
@@ -385,7 +388,7 @@ int scan_me(char *name,
 	if (i_mbox) i_mbox->recno = 1;
     }
 
-    mailbox_expunge(mailbox, virus_check, i_mbox, 0, NULL);
+    mailbox_expunge(mailbox, virus_check, i_mbox, 0, NULL, MessageExpunge);
     mailbox_close(&mailbox);
 
     return 0;
@@ -503,8 +506,9 @@ void append_notifications()
 	    fflush(f);
 	    msgsize = ftell(f);
 
-	    /* XXX send MessageNew or MessageAppend event notification here ? */
-	    append_setup(&as, i_mbox->owner, NULL, NULL, 0, NULL, NULL, 0, 0);
+	    /* send MessageAppend event notification */
+	    append_setup(&as, i_mbox->owner, NULL, NULL, 0, NULL, NULL, 0, MessageAppend);
+
 	    pout = prot_new(fd, 0);
 	    prot_rewind(pout);
 	    append_fromstream(&as, &body, pout, msgsize, t, NULL);

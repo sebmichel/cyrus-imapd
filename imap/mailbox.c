@@ -2749,16 +2749,19 @@ static unsigned expungedeleted(struct mailbox *mailbox __attribute__((unused)),
  * function pointed to by 'decideproc' is called (with 'deciderock') to
  * determine which messages to expunge.  If 'decideproc' is a null pointer,
  * then messages with the \Deleted flag are expunged.
+ *
+ * 	event_type - the event among MessageExpunge, MessageExpire (zero means
+ * 		     don't send notification)
  */
 EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 		    mailbox_decideproc_t *decideproc, void *deciderock,
-		    unsigned *nexpunged)
+		    unsigned *nexpunged, int event_type)
 {
     int r = 0;
     int numexpunged = 0;
     uint32_t recno;
     struct index_record record;
-    struct event_state event_state = EVENT_STATE_INITIALIZER;
+    struct event_state *event_state = NULL;
 
     assert(mailbox_index_islocked(mailbox, 1));
 
@@ -2768,7 +2771,8 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	return 0;
     }
 
-    event_newstate(MessageExpunge, &event_state);
+    if (event_type)
+	event_newstate(event_type, &event_state);
 
     if (!decideproc) decideproc = expungedeleted;
 
@@ -2789,10 +2793,7 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	    r = mailbox_rewrite_index_record(mailbox, &record);
 	    if (r) return IMAP_IOERROR;
 
-	    if (event_state.state) {
-		mboxevent_extract_record(&event_state, mailbox, &record);
-		event_state.state = EVENT_PENDING;
-	    }
+	    mboxevent_extract_record(event_state, mailbox, &record);
 	}
     }
 
@@ -2801,13 +2802,9 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	       numexpunged, mailbox->name);
     }
 
-    /* send MessageExpunge event notification */
-    if (event_state.state == EVENT_PENDING) {
-	mboxevent_extract_mailbox(&event_state, mailbox);
-	mboxevent_notify(&event_state);
-    }
-    else
-	mboxevent_abort(&event_state);
+    /* send or abort the MessageExpunge or MessageExpire event notification */
+    mboxevent_extract_mailbox(event_state, mailbox);
+    mboxevent_notify(&event_state);
 
     if (nexpunged) *nexpunged = numexpunged;
 
@@ -2859,7 +2856,7 @@ EXPORTED int mailbox_expunge_cleanup(struct mailbox *mailbox, time_t expunge_mar
 	    break;
 	}
 
-	/* don't send again MessageExpunge notification for expired message */
+	/* don't send again MessageExpunge notification when cleaning */
     }
 
     if (dirty) {
@@ -3453,7 +3450,7 @@ EXPORTED int mailbox_rename_cleanup(struct mailbox **mailboxptr, int isinbox)
 
     if (isinbox) {
 	/* Expunge old mailbox */
-	r = mailbox_expunge(oldmailbox, expungeall, (char *)0, NULL);
+	r = mailbox_expunge(oldmailbox, expungeall, (char *)0, NULL, 0);
 	if (!r) r = mailbox_commit(oldmailbox);
 	mailbox_close(mailboxptr);
     } else {

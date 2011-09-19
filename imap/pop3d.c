@@ -824,7 +824,7 @@ static int expunge_deleted(void)
     uint32_t msgno;
     int r = 0;
     int numexpunged = 0;
-    struct event_state event_state = EVENT_STATE_INITIALIZER;
+    struct event_state *event_state = NULL;
 
     event_newstate(MessageExpunge, &event_state);
 
@@ -850,10 +850,7 @@ static int expunge_deleted(void)
 	r = mailbox_rewrite_index_record(popd_mailbox, &record);
 	if (r) break;
 
-	if (event_state.state) {
-	    mboxevent_extract_record(&event_state, popd_mailbox, &record);
-	    event_state.state = EVENT_PENDING;
-	}
+	mboxevent_extract_record(event_state, popd_mailbox, &record);
     }
 
     if (r) {
@@ -866,12 +863,9 @@ static int expunge_deleted(void)
 	       numexpunged, popd_mailbox->name);
     }
 
-    if (event_state.state == EVENT_PENDING) {
-	mboxevent_extract_mailbox(&event_state, popd_mailbox);
-	mboxevent_notify(&event_state);
-    }
-    else
-	mboxevent_abort(&event_state);
+    /* send the MessageExpunge event notification */
+    mboxevent_extract_mailbox(event_state, popd_mailbox);
+    mboxevent_notify(&event_state);
 
     return r;
 }

@@ -245,8 +245,7 @@ static int expire(char *name, int matchlen __attribute__((unused)),
 			name, ((double)expire_seconds/86400));
 	    }
 
-	    /* XXX check to don't notify expired message because already done */
-	    r = mailbox_expunge(mailbox, expire_cb, erock, NULL);
+	    r = mailbox_expunge(mailbox, expire_cb, erock, NULL, MessageExpire);
 	    if (r)
 		syslog(LOG_ERR, "failed to expire old messages: %s", mailbox->name);
 	}
@@ -411,6 +410,9 @@ int main(int argc, char *argv[])
     /* open the quota db, we'll need it for expunge */
     quotadb_init(0);
     quotadb_open(NULL);
+
+    /* setup for mailbox event notifications */
+    mboxevent_init();
 
     if (duplicate_init(NULL) != 0) {
 	fprintf(stderr, 
