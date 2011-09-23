@@ -5458,8 +5458,10 @@ static void cmd_create(char *tag, char *name, struct dlist *extargs, int localon
 	    }
 	}
 
-	/* send the MailboxCreate event notification if enabled */
-	mboxevent_notify(&event_state);
+	/* send a MailboxCreate event notification */
+	if (!r)
+	    mboxevent_notify(event_state);
+	mboxevent_free(&event_state);
     }
 
     imapd_check(NULL, 0);
@@ -5596,8 +5598,10 @@ static void cmd_delete(char *tag, char *name, int localonly, int force)
         }
     }
 
-    /* send the MailboxDelete event notification if enabled */
-    mboxevent_notify(&event_state);
+    /* send a MailboxDelete event notification */
+    if (!r)
+	mboxevent_notify(event_state);
+    mboxevent_free(&event_state);
 
     /* was it a top-level user mailbox? */
     /* localonly deletes are only per-mailbox */
@@ -5998,8 +6002,10 @@ static void cmd_rename(char *tag, char *oldname, char *newname, char *partition)
 	   mboxname_userownsmailbox(imapd_userid, newmailboxname))
 	    goto submboxes;
 
-	/* send the MailboxRename event notification if enabled */
-	mboxevent_notify(&event_state);
+	/* send a MailboxRename event notification if enabled */
+	if (!r)
+	    mboxevent_notify(event_state);
+	mboxevent_free(&event_state);
     }
 
     /* If we're renaming a user, take care of changing quotaroot, ACL,
@@ -6455,8 +6461,17 @@ static void cmd_changesub(char *tag, char *namespace, char *name, int add)
 	    r = (*imapd_namespace.mboxname_tointernal)(&imapd_namespace, name,
 						       imapd_userid, mailboxname);
 	    if (!r) {
+		struct event_state *event_state = NULL;
+
+		event_newstate(add ? MailboxSubscribe : MailboxUnSubscribe,
+			       &event_state);
 		r = mboxlist_changesub(mailboxname, imapd_userid, 
-				       imapd_authstate, add, force);
+				       imapd_authstate, event_state, add, force);
+
+		/* send a MailboxSubscribe or MailboxUnSubscribe event notification */
+		if (!r)
+		    mboxevent_notify(event_state);
+		mboxevent_free(&event_state);
 	    }
 	}
     }

@@ -58,35 +58,42 @@
  */
 enum  {
     /* Message Addition and Deletion */
-    MessageAppend = 1,
-    MessageExpire,
-    MessageExpunge,
-    MessageNew,
-    vnd_cmu_MessageCopy, /* additional event type to notify IMAP COPY */
+    MessageAppend       = (1<<0),
+    MessageExpire       = (1<<1),
+    MessageExpunge      = (1<<2),
+    MessageNew          = (1<<3),
+    vnd_cmu_MessageCopy = (1<<4), /* additional event type to notify IMAP COPY */
     /* Message Flags */
-    MessageRead,
-    MessageTrash,
-    FlagsSet,
-    FlagsClear,
+    MessageRead         = (1<<5),
+    MessageTrash        = (1<<6),
+    FlagsSet            = (1<<7),
+    FlagsClear          = (1<<8),
     /* Mailbox Management */
-    MailboxCreate,
-    MailboxDelete,
-    MailboxRename
+    MailboxCreate       = (1<<9),
+    MailboxDelete       = (1<<10),
+    MailboxRename       = (1<<11),
+    MailboxSubscribe    = (1<<12),
+    MailboxUnSubscribe  = (1<<13)
 };
 
-/* order event parameters for easy parsing */
+/*
+ * event parameters defined in RFC 5423 - Internet Message Store Events
+ */
 enum {
-    event_vnd_cmu_host_idx = 0,
-    event_timestamp_idx,
+    event_mailboxID_idx = 0,
     event_oldMailboxID_idx,
-    event_vnd_cmu_oldUidset_idx,
-    event_mailboxID_idx,
+    /* extra event parameters optional in the RFC */
+    event_flagNames_idx,
     event_messages_idx,
-    event_vnd_cmu_newMessages_idx,
+    event_timestamp_idx,
     event_uidnext_idx,
     event_uidset_idx,
+    event_user_idx,
+    /* extra event parameters not defined in the RFC */
+    event_vnd_cmu_host_idx,
     event_vnd_cmu_midset_idx,
-    event_flagNames_idx,
+    event_vnd_cmu_newMessages_idx,
+    event_vnd_cmu_oldUidset_idx
 };
 
 /*
@@ -95,13 +102,12 @@ enum {
 enum event_param {
     event_mailboxID =            (1<<event_mailboxID_idx),
     event_oldMailboxID =         (1<<event_oldMailboxID_idx),
-    /* extra event parameters optional in the RFC */
     event_flagNames =            (1<<event_flagNames_idx),
     event_messages =             (1<<event_messages_idx),
     event_timestamp =            (1<<event_timestamp_idx),
     event_uidnext =              (1<<event_uidnext_idx),
     event_uidset =               (1<<event_uidset_idx),
-    /* extra event parameters not defined in the RFC */
+    event_user =                 (1<<event_user_idx),
     event_vnd_cmu_host =         (1<<event_vnd_cmu_host_idx),
     event_vnd_cmu_midset =       (1<<event_vnd_cmu_midset_idx),
     event_vnd_cmu_newMessages =  (1<<event_vnd_cmu_newMessages_idx),
@@ -122,6 +128,7 @@ struct event_state {
     struct timeval timestamp;
     char uidnext[21];
     struct buf uidset;
+    char *user;
 
     /* private event parameters */
     struct buf midset;
@@ -129,7 +136,7 @@ struct event_state {
     struct buf olduidset;
 
     /* formatted representation of event parameters */
-    const char *params[event_flagNames_idx+1];
+    const char *params[event_vnd_cmu_oldUidset_idx+1];
 
     struct event_state *next;
 };
@@ -149,10 +156,14 @@ void mboxevent_init(void);
 struct event_state *event_newstate(int type, struct event_state **event);
 
 /*
- * Send a notification for this event and release any allocated resources
- * But don't send notification is event->aborting is true
+ * Send a notification for this event
  */
-void mboxevent_notify(struct event_state **event);
+void mboxevent_notify(struct event_state *event);
+
+/*
+ * Release any allocated resources
+ */
+void mboxevent_free(struct event_state **event);
 
 /*
  * Test if the given parameter must be filled for the given event type

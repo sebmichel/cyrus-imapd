@@ -61,6 +61,7 @@
 #define EVENT_VERSION 1
 #endif
 
+
 static int extra_params = 0;
 static const char *notifier = NULL;
 static strarray_t excludedflags;
@@ -72,6 +73,8 @@ static char *properties_formatter(int event_type, const char **event_params);
 #endif
 static char *json_formatter(int event_type, const char **event_params);
 
+#define MAILBOX_EVENTS(X) (X & (MailboxCreate|MailboxDelete|MailboxRename|\
+			       MailboxSubscribe|MailboxUnSubscribe))
 
 void mboxevent_init(void)
 {
@@ -95,7 +98,7 @@ void mboxevent_init(void)
 
 	    /* find end of flag */
 	    if ((next_flag = strchr(cur_flag, ' ')) ||
-		    (next_flag = strchr(cur_flag, '\t')))
+		(next_flag = strchr(cur_flag, '\t')))
 		*next_flag++ = '\0';
 
 	    /* add the flag to the list */
@@ -122,7 +125,7 @@ void mboxevent_init(void)
 
 	    /* find end of folder */
 	    if ((next_folder = strchr(cur_folder, ' ')) ||
-		    (next_folder = strchr(cur_folder, '\t')))
+		(next_folder = strchr(cur_folder, '\t')))
 		*next_folder++ = '\0';
 
 	    /* special option to exclude all folders */
@@ -194,7 +197,7 @@ struct event_state *event_newstate(int type, struct event_state **event)
 
     /* event notification is completely disabled */
     if (!notifier)
-    	return NULL;
+	return NULL;
 
     new_event = xzmalloc(sizeof(struct event_state));
     new_event->type = type;
@@ -223,23 +226,34 @@ struct event_state *event_newstate(int type, struct event_state **event)
     return new_event;
 }
 
-void mboxevent_free(struct event_state *event)
+void mboxevent_free(struct event_state **event_state)
 {
-    assert(event);
+    struct event_state *next, *event = *event_state;
 
-    buf_free(&event->uidset);
-    buf_free(&event->midset);
-    buf_free(&event->olduidset);
+    if (!event)
+	return;
 
-    if (event->mailboxid) {
-	free((char *)event->mailboxid->mailbox);
-	free(event->mailboxid);
+    do {
+	buf_free(&event->uidset);
+	buf_free(&event->midset);
+	buf_free(&event->olduidset);
+
+	if (event->mailboxid) {
+	    free((char *)event->mailboxid->mailbox);
+	    free(event->mailboxid);
+	}
+	if (event->oldmailboxid) {
+	    free((char *)event->oldmailboxid->mailbox);
+	    free(event->oldmailboxid);
+	}
+
+	next = event->next;
+	free(event);
+	event = next;
     }
-    if (event->oldmailboxid) {
-	free((char *)event->oldmailboxid->mailbox);
-	free(event->oldmailboxid);
-    }
-    free(event);
+    while (event);
+
+    *event_state = NULL;
 }
 
 static const char *event2name(int type)
@@ -269,6 +283,10 @@ static const char *event2name(int type)
 	return "MailboxDelete";
     case MailboxRename:
 	return "MailboxRename";
+    case MailboxSubscribe:
+	return "MailboxSubscribe";
+    case MailboxUnSubscribe:
+	return "MailboxUnSubscribe";
     default:
 	fatal("Unknown message event", EC_SOFTWARE);
     }
@@ -310,6 +328,10 @@ static int filled_params(struct event_state *event)
 	buf_len(&event->uidset) == 0)
 	buf_appendcstr(&buffer, " uidset");
 
+    if (mboxevent_expected_params(event->type, event_user) &&
+	event->user == NULL)
+	buf_appendcstr(&buffer, " user");
+
     if (mboxevent_expected_params(event->type, event_vnd_cmu_midset) &&
 	buf_len(&event->midset) == 0)
 	buf_appendcstr(&buffer, " vnd.cmu.midset");
@@ -342,43 +364,48 @@ int mboxevent_expected_params(int event_type, enum event_param param)
     case event_vnd_cmu_host:
 	return extra_params & event_vnd_cmu_host;
     case event_oldMailboxID:
-	return event_type == vnd_cmu_MessageCopy || event_type == MailboxRename;
+	return event_type & (vnd_cmu_MessageCopy|MailboxRename);
     case event_vnd_cmu_oldUidset:
-	return event_type == vnd_cmu_MessageCopy;
+	return event_type & vnd_cmu_MessageCopy;
     case event_flagNames:
 	/* flagNames may be included with MessageAppend and MessageNew also
 	 * we don't expect it here. */
-	return event_type == FlagsSet || event_type == FlagsClear;
+	return event_type & (FlagsSet|FlagsClear);
+
+    /* at this point following parameters do not apply to MailboxXXXX events */
     case event_messages:
 	if (!(extra_params & event_messages))
 	    return 0;
+	break;
     case event_vnd_cmu_newMessages:
 	if (!(extra_params & event_vnd_cmu_newMessages))
 	    return 0;
+	break;
     case event_vnd_cmu_midset:
 	if (!(extra_params & event_vnd_cmu_midset))
 	    return 0;
+	break;
     case event_uidnext:
 	if (!(extra_params & event_uidnext))
 	    return 0;
+	break;
     case event_uidset:
-	return event_type != MailboxCreate &&
-	       event_type != MailboxDelete &&
-	       event_type != MailboxRename;
+	break;
+    case event_user:
+	return event_type & (MailboxSubscribe|MailboxUnSubscribe);
     }
 
-    /* never happen */
-    return 0;
+    return !MAILBOX_EVENTS(event_type);
 }
 
-void mboxevent_notify(struct event_state **event_state)
+void mboxevent_notify(struct event_state *event)
 {
     char *url1 = xmalloc(MAX_MAILBOX_PATH+1);
     char *url2 = NULL;
     char *flagnames = NULL;
     uint32_t uid;
     int type;
-    struct event_state *next, *event = *event_state;
+    struct event_state *next;
     char *formatted_message;
     char timestamp[30];
 
@@ -405,8 +432,85 @@ void mboxevent_notify(struct event_state **event_state)
 	if (event->aborting)
 	    goto next;
 
-	/* check if all event parameters are filled */
+	/* check if expected event parameters are filled */
 	assert(filled_params(event));
+
+	/* use an IMAP URL to refer to a mailbox or to a specific message */
+	if (event->mailboxid) {
+	    /* XXX store uidset in an array of uint32 to avoid such parsing */
+	    /* add message's UID in IMAP URL if single message */
+	    if (buf_len(&event->uidset) &&
+		!strchr(buf_cstring(&event->uidset), ' ')) {
+
+		parseuint32(buf_cstring(&event->uidset), NULL, &uid);
+		event->mailboxid->uid = uid;
+		/* also don't send the oldUidset parameter */
+		buf_reset(&event->uidset);
+	    }
+	    imapurl_toURL(url1, event->mailboxid);
+	    event->params[event_mailboxID_idx] = url1;
+	}
+
+	if (event->oldmailboxid) {
+	    if (url2 == NULL)
+		url2 = xmalloc(MAX_MAILBOX_PATH+1);
+
+	    /* add message's UID in IMAP URL if single message */
+	    if (buf_len(&event->olduidset) &&
+		!strchr(buf_cstring(&event->olduidset), ' ')) {
+
+		parseuint32(buf_cstring(&event->olduidset), NULL, &uid);
+		event->oldmailboxid->uid = uid;
+		/* also don't send the oldUidset parameter */
+		buf_reset(&event->olduidset);
+	    }
+	    imapurl_toURL(url2, event->oldmailboxid);
+	    event->params[event_oldMailboxID_idx] = url2;
+	}
+
+	if (*(event->messages))
+	    event->params[event_messages_idx] = event->messages;
+
+	if (extra_params & event_timestamp) {
+	    switch (config_getenum(IMAPOPT_EVENT_TIMESTAMP_FORMAT)) {
+	    case IMAP_ENUM_EVENT_TIMESTAMP_FORMAT_EPOCH :
+		sprintf(timestamp, "%ld%03ld\n", event->timestamp.tv_sec,
+		        event->timestamp.tv_usec ? (event->timestamp.tv_usec/1000) : 0);
+		break;
+	    case IMAP_ENUM_EVENT_TIMESTAMP_FORMAT_ISO8601 :
+		time_to_iso8601(event->timestamp.tv_sec,
+		                event->timestamp.tv_usec/1000,
+		                timestamp, sizeof(timestamp));
+		break;
+	    default:
+		/* never happen */
+		break;
+	    }
+	    event->params[event_timestamp_idx] = timestamp;
+	}
+
+	if (*(event->uidnext))
+	    event->params[event_uidnext_idx] = event->uidnext;
+
+	if (buf_len(&event->uidset) > 0)
+	    event->params[event_uidset_idx] = buf_cstring(&event->uidset);
+
+	if (event->user)
+	    event->params[event_user_idx] = event->user;
+
+	/* XXX this legacy parameter is not needed since mailboxID is an IMAP URL */
+	if (extra_params & event_vnd_cmu_host)
+	    event->params[event_vnd_cmu_host_idx] = config_servername;
+
+	if (buf_len(&event->midset) > 0)
+	    event->params[event_vnd_cmu_midset_idx] = buf_cstring(&event->midset);
+
+	if (*(event->newmessages))
+	    event->params[event_vnd_cmu_newMessages_idx] = event->newmessages;
+
+
+	if (buf_len(&event->olduidset) > 0)
+	    event->params[event_vnd_cmu_oldUidset_idx] = buf_cstring(&event->olduidset);
 
 	/* may split FlagsSet event in several event notifications */
 	do {
@@ -425,77 +529,6 @@ void mboxevent_notify(struct event_state **event_state)
 		}
 	    }
 
-	    /* this legacy parameter is not needed since mailboxID is an IMAP URL */
-	    if (extra_params & event_vnd_cmu_host)
-		event->params[event_vnd_cmu_host_idx] = config_servername;
-
-	    if (extra_params & event_timestamp) {
-		switch (config_getenum(IMAPOPT_EVENT_TIMESTAMP_FORMAT)) {
-		case IMAP_ENUM_EVENT_TIMESTAMP_FORMAT_EPOCH :
-		    sprintf(timestamp, "%ld%03ld\n", event->timestamp.tv_sec,
-		            event->timestamp.tv_usec ? (event->timestamp.tv_usec/1000) : 0);
-		    break;
-		case IMAP_ENUM_EVENT_TIMESTAMP_FORMAT_ISO8601 :
-		    time_to_iso8601(event->timestamp.tv_sec,
-		                    event->timestamp.tv_usec/1000,
-		                    timestamp, sizeof(timestamp));
-		    break;
-		default:
-		    /* never happen */
-		    break;
-		}
-		event->params[event_timestamp_idx] = timestamp;
-	    }
-	    /* use an IMAP URL to refer to a mailbox or to a specific message */
-	    if (event->mailboxid) {
-		/* XXX store uidset in an array of uint32 to avoid such parsing */
-		/* add message's UID in IMAP URL if single message */
-		if (buf_len(&event->uidset) &&
-		    !strchr(buf_cstring(&event->uidset), ' ')) {
-
-		    parseuint32(buf_cstring(&event->uidset), NULL, &uid);
-		    event->mailboxid->uid = uid;
-		    /* also don't send the oldUidset parameter */
-		    buf_reset(&event->uidset);
-		}
-		imapurl_toURL(url1, event->mailboxid);
-		event->params[event_mailboxID_idx] = url1;
-	    }
-
-	    if (event->oldmailboxid) {
-		if (url2 == NULL)
-		    url2 = xmalloc(MAX_MAILBOX_PATH+1);
-
-		/* add message's UID in IMAP URL if single message */
-		if (buf_len(&event->olduidset) &&
-		    !strchr(buf_cstring(&event->olduidset), ' ')) {
-
-		    parseuint32(buf_cstring(&event->olduidset), NULL, &uid);
-		    event->oldmailboxid->uid = uid;
-		    /* also don't send the oldUidset parameter */
-		    buf_reset(&event->olduidset);
-		}
-		imapurl_toURL(url2, event->oldmailboxid);
-		event->params[event_oldMailboxID_idx] = url2;
-	    }
-	    if (*(event->uidnext))
-		event->params[event_uidnext_idx] = event->uidnext;
-
-	    if (*(event->messages))
-		event->params[event_messages_idx] = event->messages;
-
-	    if (*(event->newmessages))
-		event->params[event_vnd_cmu_newMessages_idx] = event->newmessages;
-
-	    if (buf_len(&event->uidset) > 0)
-		event->params[event_uidset_idx] = buf_cstring(&event->uidset);
-
-	    if (buf_len(&event->olduidset) > 0)
-		event->params[event_vnd_cmu_oldUidset_idx] = buf_cstring(&event->olduidset);
-
-	    if (buf_len(&event->midset) > 0)
-		event->params[event_vnd_cmu_midset_idx] = buf_cstring(&event->midset);
-
 	    if (strarray_size(&event->flagnames) > 0) {
 		/* don't send flagNames parameter for those events */
 		if (type != MessageTrash && type != MessageRead) {
@@ -507,14 +540,15 @@ void mboxevent_notify(struct event_state **event_state)
 		}
 	    }
 
+	    /* notification is ready to send */
 	    formatted_message = json_formatter(type, event->params);
 	    notify(notifier, "EVENT", NULL, NULL, NULL, 0, NULL, formatted_message);
 
 	    if (flagnames) {
 		free(flagnames);
-		flagnames = NULL;
+		event->params[event_flagNames_idx] = flagnames = NULL;
 	    }
-	    memset(event->params, 0, sizeof(event->params));
+
 	}
 	while (strarray_size(&event->flagnames) > 0);
 
@@ -523,16 +557,13 @@ void mboxevent_notify(struct event_state **event_state)
 	    memset(url2, 0, sizeof(url2));
 
      next:
-	next = event->next;
-	mboxevent_free(event);
-	event = next;
+	event = event->next;
     }
     while (event);
 
     free(url1);
     if (url2)
 	free(url2);
-    *event_state = NULL;
 
     return;
 }
@@ -640,13 +671,13 @@ void mboxevent_extract_mailbox(struct event_state *event, struct mailbox *mailbo
     }
 
     /* verify that at least one message has been added depending the event type */
-    if (event->type != MailboxCreate && event->type != MailboxDelete &&
-	event->type != MailboxRename) {
+    if (!MAILBOX_EVENTS(event->type)) {
 	if (buf_len(&event->uidset) == 0) {
 	    event->aborting = 1;
 	    return;
 	}
     }
+
     assert(event->mailboxid == NULL);
     event->mailboxid = mboxevent_toURL(mailbox);
 
@@ -705,6 +736,8 @@ static char *properties_formatter(int event_type, const char **event_params)
 	buf_printf(&buffer, "vnd.cmu.midset=%s\n", event_params[event_vnd_cmu_midset_idx]);
     if (event_params[event_flagNames_idx] != NULL)
 	buf_printf(&buffer, "flagNames=%s\n", event_params[event_flagNames_idx]);
+    if (event_params[event_user_idx] != NULL)
+	buf_printf(&buffer, "user=%s\n", event_params[event_user_idx]);
 
     return buf_release(&buffer);
 }
@@ -734,13 +767,13 @@ static char *json_formatter(int event_type, const char **event_params)
     if (event_params[event_oldMailboxID_idx] != NULL)
 	buf_printf(&buffer, ",\"oldMailboxID\":\"%s\"", event_params[event_oldMailboxID_idx]);
     if (event_params[event_vnd_cmu_oldUidset_idx] != NULL)
-    	buf_printf(&buffer, ",\"oldUidset\":\"%s\"", event_params[event_vnd_cmu_oldUidset_idx]);
+	buf_printf(&buffer, ",\"oldUidset\":\"%s\"", event_params[event_vnd_cmu_oldUidset_idx]);
     if (event_params[event_mailboxID_idx] != NULL)
-    	buf_printf(&buffer, ",\"mailboxID\":\"%s\"", event_params[event_mailboxID_idx]);
+	buf_printf(&buffer, ",\"mailboxID\":\"%s\"", event_params[event_mailboxID_idx]);
     if (event_params[event_messages_idx] != NULL)
 	buf_printf(&buffer, ",\"messages\":%s", event_params[event_messages_idx]);
     if (event_params[event_vnd_cmu_newMessages_idx] != NULL)
-        buf_printf(&buffer, ",\"vnd.cmu.newmessages\":%s", event_params[event_vnd_cmu_newMessages_idx]);
+	buf_printf(&buffer, ",\"vnd.cmu.newmessages\":%s", event_params[event_vnd_cmu_newMessages_idx]);
     if (event_params[event_uidnext_idx] != NULL)
 	buf_printf(&buffer, ",\"uidnext\":%s", event_params[event_uidnext_idx]);
     if (event_params[event_uidset_idx] != NULL)
@@ -748,7 +781,9 @@ static char *json_formatter(int event_type, const char **event_params)
     if (event_params[event_vnd_cmu_midset_idx] != NULL)
 	buf_printf(&buffer, ",\"vnd.cmu.midset\":\"%s\"", event_params[event_vnd_cmu_midset_idx]);
     if (event_params[event_flagNames_idx] != NULL)
-    	buf_printf(&buffer, ",\"flagNames\":\"%s\"", event_params[event_flagNames_idx]);
+	buf_printf(&buffer, ",\"flagNames\":\"%s\"", event_params[event_flagNames_idx]);
+    if (event_params[event_user_idx] != NULL)
+	buf_printf(&buffer, ",\"user\":\"%s\"", event_params[event_user_idx]);
     buf_printf(&buffer, "}");
 
     return buf_release(&buffer);

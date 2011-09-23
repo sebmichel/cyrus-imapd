@@ -3323,8 +3323,9 @@ EXPORTED int mboxlist_checksub(const char *name, const char *userid)
  * if 'force' is set, force the subscription through even if
  * we don't know about 'name'.
  */
-EXPORTED int mboxlist_changesub(const char *name, const char *userid,
-		       struct auth_state *auth_state, int add, int force)
+EXPORTED int mboxlist_changesub(const char *name, const char *userid, 
+		       struct auth_state *auth_state,
+		       struct event_state *event_state, int add, int force)
 {
     struct mboxlist_entry *mbentry = NULL;
     int r;
@@ -3363,6 +3364,14 @@ EXPORTED int mboxlist_changesub(const char *name, const char *userid,
     default:
 	r = IMAP_IOERROR;
 	break;
+    }
+
+    /* prepare a MailboxSubscribe or MailboxUnSubscribe event notification */
+    if (event_state) {
+	event_state->user = userid;
+	event_state->mailboxid = xzmalloc(sizeof(struct imapurl));
+	event_state->mailboxid->server = config_servername;
+	event_state->mailboxid->mailbox = strdup(name);
     }
 
     sync_log_subscribe(userid, name);
