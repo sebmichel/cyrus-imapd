@@ -319,7 +319,8 @@ EXPORTED int index_expunge(struct index_state *state, char *sequence,
     /* send the MessageExpunge event notification for "immediate", "default"
      * and "delayed" expunge */
     mboxevent_extract_mailbox(state->eventstate, state->mailbox);
-    mboxevent_notify(&state->eventstate);
+    mboxevent_notify(state->eventstate);
+    mboxevent_free(&state->eventstate);
 
     /* unlock before responding */
     index_unlock(state);
@@ -948,7 +949,8 @@ EXPORTED int index_fetch(struct index_state *state,
 
 	/* send the MessageRead event notification */
 	mboxevent_extract_mailbox(state->eventstate, state->mailbox);
-	mboxevent_notify(&state->eventstate);
+	mboxevent_notify(state->eventstate);
+	mboxevent_free(&state->eventstate);
     }
 
     if (fetchargs->vanished) {
@@ -1069,7 +1071,8 @@ EXPORTED int index_store(struct index_state *state, char *sequence,
      * and FlagsSet events */
     mboxevent_extract_mailbox(flagsset_state, state->mailbox);
     mboxevent_extract_mailbox(flagsclear_state, state->mailbox);
-    mboxevent_notify(&state->eventstate);
+    mboxevent_notify(state->eventstate);
+    mboxevent_free(&state->eventstate);
 
 out:
     if (storeargs->operation == STORE_ANNOTATION && r)

@@ -256,10 +256,9 @@ EXPORTED int append_commit(struct appendstate *as,
     }
 
     /* send the list of MessageCopy or MessageAppend event notifications at once */
-    if (as->event_type) {
-	mboxevent_notify(&as->eventstates);
-	as->event_type = 0;
-    }
+    mboxevent_notify(as->eventstates);
+    mboxevent_free(&as->eventstates);
+    as->event_type = 0;
 
     if (mailboxptr) {
 	*mailboxptr = as->mailbox;
@@ -288,20 +287,8 @@ EXPORTED int append_abort(struct appendstate *as)
 
     seqset_free(as->seen_seq);
 
-    if (as->eventstates) {
-	struct event_state *event;
-
-	/* abort the MessageCopy or MessageAppend event notifications */
-	as->eventstates->aborting = 1;
-	event = as->eventstates->next;
-	while (event != NULL) {
-	    event->aborting = 1;
-	    event = event->next;
-	}
-
-	mboxevent_notify(&as->eventstates);
-	as->eventstates = NULL;
-    }
+    /* don't send the MessageCopy or MessageAppend event notifications */
+    mboxevent_free(&as->eventstates);
     as->event_type = 0;
 
     return r;

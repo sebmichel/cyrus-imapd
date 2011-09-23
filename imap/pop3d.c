@@ -865,7 +865,8 @@ static int expunge_deleted(void)
 
     /* send the MessageExpunge event notification */
     mboxevent_extract_mailbox(event_state, popd_mailbox);
-    mboxevent_notify(&event_state);
+    mboxevent_notify(event_state);
+    mboxevent_free(&event_state);
 
     return r;
 }

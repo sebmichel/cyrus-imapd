@@ -2800,11 +2800,13 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
     if (numexpunged > 0) {
 	syslog(LOG_NOTICE, "Expunged %d messages from %s",
 	       numexpunged, mailbox->name);
+
+	/* send or abort the MessageExpunge or MessageExpire event notification */
+	mboxevent_extract_mailbox(event_state, mailbox);
+	mboxevent_notify(event_state);
     }
 
-    /* send or abort the MessageExpunge or MessageExpire event notification */
-    mboxevent_extract_mailbox(event_state, mailbox);
-    mboxevent_notify(&event_state);
+    mboxevent_free(&event_state);
 
     if (nexpunged) *nexpunged = numexpunged;
 
