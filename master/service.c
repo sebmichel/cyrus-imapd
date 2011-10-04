@@ -45,6 +45,7 @@
 #include <config.h>
 
 #include <stdio.h>
+#include <sys/select.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -261,6 +262,10 @@ int main(int argc, char **argv, char **envp)
     ino_t start_ino;
     off_t start_size;
     time_t start_mtime;
+    fd_set rfds;
+    struct timeval tv;
+    int stop = 0;
+    int r;
     
     opterr = 0; /* disable error reporting,
 		   since we don't know about service-specific options */
@@ -422,6 +427,48 @@ int main(int argc, char **argv, char **envp)
 		break;
 	    }
 
+	    /* POSIX says it is implementation-defined whether 'select'
+	     * restarts or can be interrupted even if the SA_RESTART
+	     * signal handler flag is set */
+	    stop = 0;
+	    while (!stop) {
+		/* wait for 500ms */
+		memset(&tv, 0, sizeof(tv));
+		tv.tv_usec = 500 * 1000;
+
+		FD_ZERO(&rfds);
+		FD_SET(LISTEN_FD, &rfds);
+
+		r = select(LISTEN_FD + 1, &rfds, NULL, NULL, &tv);
+		/* we still did not accept anything, so regardless of the result
+		 * we want to leave if we received a signal */
+		stop = signals_poll();
+		if (r > 0) {
+		    /* ready to receive connection */
+		    break;
+		}
+		else if (r == -1) {
+		    /* error */
+		    stop = 1;
+
+		    switch (errno) {
+		    case EINTR:
+			break;
+
+		    default:
+			syslog(LOG_ERR, "select failed: %m");
+			break;
+		    }
+		}
+		/* else: timeout */
+	    }
+
+	    if (stop) {
+		/* time to leave */
+		break;
+	    }
+	    /* else: incoming connection is waiting for us */
+
 	    if (soctype == SOCK_STREAM) {
 		fd = accept(LISTEN_FD, NULL, NULL);
 		if (fd < 0) {
@@ -464,6 +511,7 @@ int main(int argc, char **argv, char **envp)
 		r = recvfrom(LISTEN_FD, (void *) &ch, 1, MSG_PEEK,
 			     (struct sockaddr *) &from, &fromlen);
 		if (r == -1) {
+		    if (signals_poll() == SIGHUP) break;
 		    syslog(LOG_ERR, "recvfrom failed: %m");
 		    if (MESSAGE_MASTER_ON_EXIT) 
 			notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
