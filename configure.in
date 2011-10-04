@@ -1487,11 +1487,6 @@ struct sockaddr_storage {
 
 /* compile time options; think carefully before modifying */
 enum {
-    /* should we send an UNAVAILABLE message to master when
-     * a service is exiting (master is already going to be 
-     * informed of the exit by the SIGCHLD signal anyway) ? */
-    MESSAGE_MASTER_ON_EXIT = 0,
-
     /* should a hierarchical rename stop on error? */
     RENAME_STOP_ON_ERROR = 1,
 

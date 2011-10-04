@@ -195,16 +195,14 @@ static int lockaccept(void)
 	    /* noop */;
 	
 	if (rc < 0 && signals_poll()) {
-	    if (MESSAGE_MASTER_ON_EXIT) 
-		notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	    service_abort(0);
 	    return -1;
 	}
 
 	if (rc < 0) {
 	    syslog(LOG_ERR, "fcntl: F_SETLKW: error getting accept lock: %m");
-	    if (MESSAGE_MASTER_ON_EXIT) 
-		notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	    service_abort(EX_OSERR);
 	    return -1;
 	}
@@ -232,8 +230,7 @@ static int unlockaccept(void)
 	if (rc < 0) {
 	    syslog(LOG_ERR, 
 		   "fcntl: F_SETLKW: error releasing accept lock: %m");
-	    if (MESSAGE_MASTER_ON_EXIT) 
-		notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	    service_abort(EX_OSERR);
 	    return -1;
 	}
@@ -361,8 +358,7 @@ int main(int argc, char **argv, char **envp)
 				       fdflags | FD_CLOEXEC);
     if (fdflags == -1) {
 	syslog(LOG_ERR, "unable to set close on exec: %m");
-	if (MESSAGE_MASTER_ON_EXIT) 
-	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	return 1;
     }
     fdflags = fcntl(STATUS_FD, F_GETFD, 0);
@@ -370,8 +366,7 @@ int main(int argc, char **argv, char **envp)
 				       fdflags | FD_CLOEXEC);
     if (fdflags == -1) {
 	syslog(LOG_ERR, "unable to set close on exec: %m");
-	if (MESSAGE_MASTER_ON_EXIT) 
-	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	return 1;
     }
 
@@ -379,14 +374,12 @@ int main(int argc, char **argv, char **envp)
     if (getsockopt(LISTEN_FD, SOL_SOCKET, SO_TYPE,
 		   (char *) &soctype, &typelen) < 0) {
 	syslog(LOG_ERR, "getsockopt: SOL_SOCKET: failed to get type: %m");
-	if (MESSAGE_MASTER_ON_EXIT) 
-	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	return 1;
     }
 
     if (service_init(newargv.count, newargv.data, envp) != 0) {
-	if (MESSAGE_MASTER_ON_EXIT) 
-	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	return 1;
     }
 
@@ -495,8 +488,7 @@ int main(int argc, char **argv, char **envp)
 			
 		    default:
 			syslog(LOG_ERR, "accept failed: %m");
-			if (MESSAGE_MASTER_ON_EXIT) 
-			    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);	
+			notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 			service_abort(EX_OSERR);
 		    }
 		}
@@ -513,8 +505,7 @@ int main(int argc, char **argv, char **envp)
 		if (r == -1) {
 		    if (signals_poll() == SIGHUP) break;
 		    syslog(LOG_ERR, "recvfrom failed: %m");
-		    if (MESSAGE_MASTER_ON_EXIT) 
-			notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+		    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 		    service_abort(EX_OSERR);
 		}
 		fd = LISTEN_FD;
@@ -526,15 +517,13 @@ int main(int argc, char **argv, char **envp)
 
 	if (fd < 0 && (signals_poll() || newfile)) {
 	    /* timed out (SIGALRM), SIGHUP, or new process file */
-	    if (MESSAGE_MASTER_ON_EXIT) 
-		notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	    service_abort(0);
 	}
 	if (fd < 0) {
 	    /* how did this happen? - we might have caught a signal. */
 	    syslog(LOG_ERR, "accept() failed but we didn't catch it?");
-	    if (MESSAGE_MASTER_ON_EXIT) 
-		notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	    service_abort(EX_SOFTWARE);
 	}
 

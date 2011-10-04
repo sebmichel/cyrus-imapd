@@ -228,8 +228,7 @@ int main(int argc, char **argv, char **envp)
 				       fdflags | FD_CLOEXEC);
     if (fdflags == -1) {
 	syslog(LOG_ERR, "unable to set close on exec: %m");
-	if (MESSAGE_MASTER_ON_EXIT) 
-	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	return 1;
     }
     fdflags = fcntl(STATUS_FD, F_GETFD, 0);
@@ -237,14 +236,12 @@ int main(int argc, char **argv, char **envp)
 				       fdflags | FD_CLOEXEC);
     if (fdflags == -1) {
 	syslog(LOG_ERR, "unable to set close on exec: %m");
-	if (MESSAGE_MASTER_ON_EXIT) 
-	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	return 1;
     }
 
     if (service_init(newargv.count, newargv.data, envp) != 0) {
-	if (MESSAGE_MASTER_ON_EXIT) 
-	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	return 1;
     }
 
@@ -274,8 +271,7 @@ int main(int argc, char **argv, char **envp)
 		    break;
 		default:
 		    syslog(LOG_ERR, "accept failed: %m");
-		    if (MESSAGE_MASTER_ON_EXIT) 
-			notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+		    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 		    service_abort(EX_OSERR);
 		}
 	    }
@@ -299,8 +295,7 @@ int main(int argc, char **argv, char **envp)
 	}
     }
 
-    if (MESSAGE_MASTER_ON_EXIT) 
-	notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
     service_abort(0);
     return 0;
 }
