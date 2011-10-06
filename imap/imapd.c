@@ -862,6 +862,7 @@ int service_main(int argc __attribute__((unused)),
 {
     sasl_security_properties_t *secprops = NULL;
     const char *localip, *remoteip;
+    struct event_state *event_state = NULL;
 
     struct io_count *io_count_start;
     struct io_count *io_count_stop;
@@ -931,6 +932,15 @@ int service_main(int argc __attribute__((unused)),
     /* LOGOUT executed */
     prot_flush(imapd_out);
     snmp_increment(ACTIVE_CONNECTIONS, -1);
+
+    /* send a Logout event notification */
+    if (event_newstate(Logout, &event_state)) {
+	event_state->user = imapd_userid;
+	event_state->iplocalport = saslprops.iplocalport;
+
+	mboxevent_notify(event_state);
+	mboxevent_free(&event_state);
+    }
 
     /* cleanup */
     imapd_reset();
@@ -2212,6 +2222,7 @@ static void autocreate_inbox(void)
 static void authentication_success(void)
 {
     int r;
+    struct event_state *event_state = NULL;
 
     /* register the user */
     proc_register("imapd", imapd_clienthost, imapd_userid, NULL);
@@ -2237,6 +2248,16 @@ static void authentication_success(void)
     mboxname_hiersep_tointernal(&imapd_namespace, imapd_userid,
 				config_virtdomains ?
 				strcspn(imapd_userid, "@") : 0);
+
+    /* send a Login event notification */
+    if (event_newstate(Login, &event_state)) {
+	event_state->user = imapd_userid;
+	event_state->iplocalport = saslprops.iplocalport;
+	event_state->ipremoteport = saslprops.ipremoteport;
+
+	mboxevent_notify(event_state);
+	mboxevent_free(&event_state);
+    }
 
     autocreate_inbox();
 }

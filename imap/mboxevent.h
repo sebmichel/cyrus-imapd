@@ -68,23 +68,33 @@ enum  {
     MessageTrash        = (1<<6),
     FlagsSet            = (1<<7),
     FlagsClear          = (1<<8),
+    /* Access Accounting */
+    Login               = (1<<9),
+    Logout              = (1<<10),
     /* Mailbox Management */
-    MailboxCreate       = (1<<9),
-    MailboxDelete       = (1<<10),
-    MailboxRename       = (1<<11),
-    MailboxSubscribe    = (1<<12),
-    MailboxUnSubscribe  = (1<<13)
+    MailboxCreate       = (1<<11),
+    MailboxDelete       = (1<<12),
+    MailboxRename       = (1<<13),
+    MailboxSubscribe    = (1<<14),
+    MailboxUnSubscribe  = (1<<15)
 };
 
 /*
  * event parameters defined in RFC 5423 - Internet Message Store Events
  */
 enum {
-    event_mailboxID_idx = 0,
-    event_oldMailboxID_idx,
-    /* extra event parameters optional in the RFC */
+    event_bodyStructure_idx = 0,
+    event_clientIP_idx,
+    event_clientPort_idx,
     event_flagNames_idx,
+    event_mailboxID_idx,
+    event_messageContent_idx,
+    event_messageSize_idx,
     event_messages_idx,
+    event_oldMailboxID_idx,
+    event_serverDomain_idx,
+    event_serverPort_idx,
+    event_service_idx,
     event_timestamp_idx,
     event_uidnext_idx,
     event_uidset_idx,
@@ -100,10 +110,18 @@ enum {
  * event parameters defined in RFC 5423 - Internet Message Store Events
  */
 enum event_param {
-    event_mailboxID =            (1<<event_mailboxID_idx),
-    event_oldMailboxID =         (1<<event_oldMailboxID_idx),
+    event_bodyStructure =        (1<<event_bodyStructure_idx),
+    event_clientIP =             (1<<event_clientIP_idx),
+    event_clientPort =           (1<<event_clientPort_idx),
     event_flagNames =            (1<<event_flagNames_idx),
+    event_mailboxID =            (1<<event_mailboxID_idx),
+    event_messageContent =       (1<<event_messageContent_idx),
+    event_messageSize =          (1<<event_messageSize_idx),
     event_messages =             (1<<event_messages_idx),
+    event_oldMailboxID =         (1<<event_oldMailboxID_idx),
+    event_serverDomain =         (1<<event_serverDomain_idx),
+    event_serverPort =           (1<<event_serverPort_idx),
+    event_service =              (1<<event_service_idx),
     event_timestamp =            (1<<event_timestamp_idx),
     event_uidnext =              (1<<event_uidnext_idx),
     event_uidset =               (1<<event_uidset_idx),
@@ -123,12 +141,19 @@ struct event_state {
     struct imapurl *mailboxid; 	/* XXX translate mailbox name to external ? */
     struct imapurl *oldmailboxid;
 
+    char *bodystructure;
     strarray_t flagnames;
+    char *messagecontent;
+    char messagesize[21]; /* 32bits size until now */
     char messages[21];
     struct timeval timestamp;
     char uidnext[21];
     struct buf uidset;
-    char *user;
+    const char *user;
+
+    /* come saslprops structure */
+    char *iplocalport;
+    char *ipremoteport;
 
     /* private event parameters */
     struct buf midset;
@@ -209,8 +234,15 @@ void mboxevent_extract_record(struct event_state *event, struct mailbox *mailbox
  */
 void mboxevent_extract_copied_record(struct event_state *event,
 				     struct mailbox *mailbox, uint32_t uid);
+
 /*
- * Extract data from the given mailbox to fill mailboxID event parameter and
+ * Extract message content to include with the event notification
+ */
+void mboxevent_extract_content(struct event_state *event,
+                               struct index_record *record, FILE* content);
+
+/*
+ * Extract meta-data from the given mailbox to fill mailboxID event parameter and
  * optionally these ones depending the type of the event:
  * - messages
  * - uidnext

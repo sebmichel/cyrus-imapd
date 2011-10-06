@@ -503,6 +503,7 @@ int service_main(int argc __attribute__((unused)),
 {
     const char *localip, *remoteip;
     sasl_security_properties_t *secprops=NULL;
+    struct event_state *event_state = NULL;
 
     if (config_iolog) {
         io_count_start = malloc (sizeof (struct io_count));
@@ -584,6 +585,15 @@ int service_main(int argc __attribute__((unused)),
     cmdloop();
 
     /* QUIT executed */
+
+    /* send a Logout event notification */
+    if (event_newstate(Logout, &event_state)) {
+	event_state->user = popd_userid;
+	event_state->iplocalport = saslprops.iplocalport;
+
+	mboxevent_notify(event_state);
+	mboxevent_free(&event_state);
+    }
 
     /* don't bother reusing KPOP connections */
     if (kflag) shut_down(0);
@@ -1744,6 +1754,17 @@ int openinbox(void)
     struct mboxlist_entry *mbentry = NULL;
     struct statusdata sdata;
     struct proc_limits limits;
+    struct event_state *event_state = NULL;
+
+    /* send a Login event notification */
+    if (event_newstate(Login, &event_state)) {
+	event_state->user = popd_userid;
+	event_state->iplocalport = saslprops.iplocalport;
+	event_state->ipremoteport = saslprops.ipremoteport;
+
+	mboxevent_notify(event_state);
+	mboxevent_free(&event_state);
+    }
 
     if (popd_subfolder) {
 	/* we need to convert to internal namespace dammit */

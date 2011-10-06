@@ -923,6 +923,12 @@ EXPORTED int append_fromstage(struct appendstate *as, struct body **body,
     record.uid = as->baseuid + as->nummsg;
     record.internaldate = internaldate;
 
+    /* prepare a new notification for this appended message
+     * the event type must be set with MessageNew or MessageAppend */
+    if (as->event_type) {
+	event_state = event_newstate(as->event_type, &as->eventstates);
+    }
+
     /* Create message file */
     as->nummsg++;
     fname = mailbox_message_fname(mailbox, record.uid);
@@ -934,6 +940,11 @@ EXPORTED int append_fromstage(struct appendstate *as, struct body **body,
 	if (!*body || (as->nummsg - 1))
 	    r = message_parse_file(destfile, NULL, NULL, body);
 	if (!r) r = message_create_record(&record, *body);
+
+	/* messageContent may be included with MessageAppend and MessageNew */
+	if (!r)
+	    mboxevent_extract_content(event_state, &record, destfile);
+
     }
     if (destfile) {
 	/* this will hopefully ensure that the link() actually happened
@@ -977,12 +988,6 @@ EXPORTED int append_fromstage(struct appendstate *as, struct body **body,
     }
     if (r)
 	goto out;
-
-    /* prepare a new notification for this appended message
-     * the event type must be set with MessageNew or MessageAppend */
-    if (as->event_type) {
-	event_state = event_newstate(as->event_type, &as->eventstates);
-    }
 
     /* Handle flags the user wants to set in the message */
     if (flags) {
