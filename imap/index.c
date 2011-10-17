@@ -2452,7 +2452,7 @@ static void index_fetchflags(struct mailbox *mailbox,
 	    flagmask = user_flags[flag/32];
 	}
 	if (!mailbox->flagname[flag] && (flagmask & (1<<(flag & 31)))) {
-	    mailbox_read_header(mailbox);
+	    mailbox_reload_header(mailbox);
 	    index_listflags(mailbox);
 	    break;
 	}
@@ -3594,7 +3594,7 @@ void *rock;
 	    flagmask = USER_FLAGS(msgno,userflag/32);
 	}
 	if (!mailbox->flagname[userflag] && (flagmask & (1<<(userflag&31)))) {
-	    mailbox_read_header(mailbox);
+	    mailbox_reload_header(mailbox);
 	    index_listflags(mailbox);
 	    break;
 	}
