@@ -395,6 +395,7 @@ extern int mailbox_open_locked(const char *mbname,
 extern int mailbox_open_index(struct mailbox *mailbox);
 extern void mailbox_close(struct mailbox *mailbox);
 
+extern int mailbox_reload_header(struct mailbox *mailbox);
 extern int mailbox_read_header(struct mailbox *mailbox);
 extern int mailbox_read_header_acl(struct mailbox *mailbox);
 extern int mailbox_read_acl(struct mailbox *mailbox, 

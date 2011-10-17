@@ -750,6 +750,58 @@ void mailbox_close(struct mailbox *mailbox)
 }
 
 /*
+ * Reloads the header of 'mailbox' if necessary.
+ *
+ * Checks whether the header file has been changed, and reloads it.
+ * Fallback to currently opened header upon issue.
+ */
+int mailbox_reload_header(struct mailbox *mailbox)
+{
+    char fnamebuf[MAX_MAILBOX_PATH+1], *path;
+    int header_fd;
+    struct stat sbuf;
+
+    path = (mailbox->mpath &&
+	    (config_metapartition_files &
+	     IMAP_ENUM_METAPARTITION_FILES_HEADER)) ?
+	mailbox->mpath : mailbox->path;
+    strlcpy(fnamebuf, path, sizeof(fnamebuf));
+    strlcat(fnamebuf, FNAME_HEADER, sizeof(fnamebuf));
+
+    if (stat(fnamebuf, &sbuf) == -1) {
+	syslog(LOG_ERR, "IOERROR: stating header for %s: %m",
+	    mailbox->name);
+	goto done;
+    }
+
+    if (sbuf.st_ino == mailbox->header_ino) {
+	/* we still have the right file opened */
+	goto done;
+    }
+
+    header_fd = open(fnamebuf, O_RDWR, 0);
+    if (header_fd == -1) {
+	syslog(LOG_ERR, "IOERROR: opening header for %s: %m",
+	    mailbox->name);
+	goto done;
+    }
+
+    /* reload header */
+    if (mailbox->header_fd != -1) {
+	close(mailbox->header_fd);
+    }
+    mailbox->header_fd = header_fd;
+    map_free(&mailbox->header_base, &mailbox->header_len);
+    map_refresh(mailbox->header_fd, 1, &mailbox->header_base,
+		&mailbox->header_len, sbuf.st_size, "header",
+		mailbox->name);
+    mailbox->header_ino = sbuf.st_ino;
+
+done:
+    return mailbox_read_header(mailbox);
+}
+
+/*
  * Read the header of 'mailbox'
  */
 int mailbox_read_header(struct mailbox *mailbox)
