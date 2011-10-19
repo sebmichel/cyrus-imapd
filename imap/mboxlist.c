@@ -1084,7 +1084,7 @@ EXPORTED int mboxlist_deletemailbox(const char *name, int isadmin,
 
 	/* abort event notification */
 	if (r && event_state)
-	    event_state->aborting = 1;
+	    mboxevent_free(&event_state);
 
     }
 
@@ -2522,6 +2522,8 @@ EXPORTED int mboxlist_setquotas(const char *root,
     int r;
     int res;
     struct txn *tid = NULL;
+    struct event_state *event_state = NULL;
+    int underquota = 0;
 
     if (!root[0] || root[0] == '.' || strchr(root, '/')
 	|| strchr(root, '*') || strchr(root, '%') || strchr(root, '?')) {
@@ -2530,6 +2532,10 @@ EXPORTED int mboxlist_setquotas(const char *root,
     
     quota_init(&q, root);
     r = quota_read(&q, &tid, 1);
+
+    if (q.limit >= 0 && q.used >= ((uquota_t) q.limit * QUOTA_UNITS) &&
+	(q.used < ((uquota_t) newquota * QUOTA_UNITS) || newquota == -1))
+	underquota = 1;
 
     if (!r) {
 	int changed = 0;
@@ -2612,7 +2618,31 @@ EXPORTED int mboxlist_setquotas(const char *root,
 done:
     quota_free(&q);
     if (r && tid) quota_abort(&tid);
-    if (!r) sync_log_quota(root);
+    if (!r) {
+	sync_log_quota(root);
+
+	/* send a QuotaChange event notification */
+	/* XXX avoid to duplicate code as below */
+	if (event_newstate(QuotaChange, &event_state)) {
+	    event_state->mailboxid = xzmalloc(sizeof(struct imapurl));
+	    event_state->mailboxid->server = config_servername;
+	    event_state->mailboxid->mailbox = strdup(root);
+	    mboxevent_extract_quota(event_state, &q);
+
+	    mboxevent_notify(event_state);
+	    mboxevent_free(&event_state);
+	}
+	/* send a QuotaWithin event notification */
+	if (underquota && event_newstate(QuotaWithin, &event_state)) {
+	    event_state->mailboxid = xzmalloc(sizeof(struct imapurl));
+	    event_state->mailboxid->server = config_servername;
+	    event_state->mailboxid->mailbox = strdup(root);
+	    mboxevent_extract_quota(event_state, &q);
+
+	    mboxevent_notify(event_state);
+	    mboxevent_free(&event_state);
+	}
+    }
 
     return r;
 }
@@ -3368,7 +3398,7 @@ EXPORTED int mboxlist_changesub(const char *name, const char *userid,
 
     /* prepare a MailboxSubscribe or MailboxUnSubscribe event notification */
     if (event_state) {
-	event_state->user = userid;
+	mboxevent_extract_access(event_state, NULL, NULL, userid);
 	event_state->mailboxid = xzmalloc(sizeof(struct imapurl));
 	event_state->mailboxid->server = config_servername;
 	event_state->mailboxid->mailbox = strdup(name);

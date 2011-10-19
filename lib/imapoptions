@@ -452,10 +452,10 @@ Blank lines and lines beginning with ``#'' are ignored.
 { "event_exclude_folders", NULL, STRING }
 /* Don't send event notification for given folder(s). Set ALL for any folder */
 
-{ "event_extra_params", "timestamp", BITFIELD("bodyStructure", "clientIP", "clientPort", "flagNames", "messageContent", "messageSize", "messages", "service", "timestamp", "uidnext", "vnd.cmu.host", "vnd.cmu.midset", "vnd.cmu.newMessages") }
+{ "event_extra_params", "timestamp", BITFIELD("bodyStructure", "clientAddress", "diskUsed", "flagNames", "messageContent", "messageSize", "messages", "service", "timestamp", "uidnext", "vnd.cmu.host", "vnd.cmu.midset", "vnd.cmu.newMessages") }
 /* Space-separated list of extra parameters to add to any appropriated event. */ 
 
-{ "event_groups", "message flags mailbox", BITFIELD("message", "flags", "access", "mailbox") }
+{ "event_groups", "message mailbox", BITFIELD("message", "quota", "flags", "access", "mailbox") }
 /* Space-separated list of groups of related events to turn on notification */
 
 { "event_notifspam", 1, SWITCH }

@@ -588,8 +588,8 @@ int service_main(int argc __attribute__((unused)),
 
     /* send a Logout event notification */
     if (event_newstate(Logout, &event_state)) {
-	event_state->user = popd_userid;
-	event_state->iplocalport = saslprops.iplocalport;
+	mboxevent_extract_access(event_state, saslprops.iplocalport,
+	                         NULL, popd_userid);
 
 	mboxevent_notify(event_state);
 	mboxevent_free(&event_state);
@@ -1758,9 +1758,8 @@ int openinbox(void)
 
     /* send a Login event notification */
     if (event_newstate(Login, &event_state)) {
-	event_state->user = popd_userid;
-	event_state->iplocalport = saslprops.iplocalport;
-	event_state->ipremoteport = saslprops.ipremoteport;
+	mboxevent_extract_access(event_state, saslprops.iplocalport,
+	                         saslprops.ipremoteport, popd_userid);
 
 	mboxevent_notify(event_state);
 	mboxevent_free(&event_state);

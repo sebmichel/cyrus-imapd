@@ -127,6 +127,20 @@ EXPORTED int append_check(const char *name,
     if (quotacheck)
 	r = mailbox_quota_check(mailbox, quotacheck);
 
+    if (r == IMAP_QUOTA_EXCEEDED) {
+	struct event_state *event_state = NULL;
+
+	/* send a QuotaExceed event notification */
+	if (event_newstate(QuotaExceed, &event_state)) {
+	    mboxevent_extract_mailbox(event_state, mailbox);
+	    mboxevent_extract_quota(event_state, &q);
+
+	    mboxevent_notify(event_state);
+	    mboxevent_free(&event_state);
+	}
+
+    }
+
 done:
     mailbox_close(&mailbox);
 
@@ -185,6 +199,18 @@ HIDDEN int append_setup_mbox(struct appendstate *as, struct mailbox *mailbox,
     if (quotacheck) {
 	r = mailbox_quota_check(as->mailbox, quotacheck);
 	if (r) {
+	    if (r == IMAP_QUOTA_EXCEEDED) {
+		struct event_state *event_state = NULL;
+
+		/* send a QuotaExceed event notification */
+		if (event_newstate(QuotaExceed, &event_state)) {
+		    mboxevent_extract_mailbox(event_state, as->mailbox);
+		    mboxevent_extract_quota(event_state, &q);
+
+		    mboxevent_notify(event_state);
+		    mboxevent_free(&event_state);
+		}
+	    }
 	    mailbox_close(&as->mailbox);
 	    return r;
 	}
@@ -1012,6 +1038,9 @@ out:
      * present in body structure ? */
     mboxevent_extract_record(event_state, mailbox, &record);
     mboxevent_extract_mailbox(event_state, mailbox);
+    /* quota usage could be different due to concurrent access on quota DB */
+    mboxevent_extract_quota(event_state,
+                            &((struct quota ) {NULL, mailbox->i.quota_mailbox_used, 0}));
 
     return 0;
 }
@@ -1081,21 +1110,25 @@ EXPORTED int append_fromstream(struct appendstate *as, struct body **body,
 	goto out;
     }
 
+    /* prepare a new notification for this appended message
+     * the event type must be set with MessageNew or MessageAppend */
+    if (as->event_type) {
+	event_state = event_newstate(as->event_type, &as->eventstates);
+    }
+
     /* Copy and parse message */
     r = message_copy_strict(messagefile, destfile, size, 0);
     if (!r) {
 	if (!*body || (as->nummsg - 1))
 	    r = message_parse_file(destfile, NULL, NULL, body);
 	if (!r) r = message_create_record(&record, *body);
+
+	/* messageContent may be included with MessageAppend and MessageNew */
+	if (!r)
+	    mboxevent_extract_content(event_state, &record, destfile);
     }
     fclose(destfile);
     if (r) goto out;
-
-    /* prepare a new notification for this appended message
-     * the event type must be set with MessageNew or MessageAppend */
-    if (as->event_type) {
-	event_state = event_newstate(as->event_type, &as->eventstates);
-    }
 
     /* Handle flags the user wants to set in the message */
     if (flags) {
@@ -1121,6 +1154,9 @@ out:
      * present in body structure */
     mboxevent_extract_record(event_state, mailbox, &record);
     mboxevent_extract_mailbox(event_state, mailbox);
+    /* quota usage could be different due to concurrent access on quota DB */
+    mboxevent_extract_quota(event_state,
+                            &((struct quota) {NULL, mailbox->i.quota_mailbox_used, 0}));
 
     return 0;
 }
@@ -1317,6 +1353,9 @@ EXPORTED int append_copy(struct mailbox *mailbox,
 
     if (event_state) {
 	mboxevent_extract_mailbox(event_state, as->mailbox);
+	/* quota usage could be different due to concurrent access on quota DB */
+	mboxevent_extract_quota(event_state,
+	                        &((struct quota) {NULL, as->mailbox->i.quota_mailbox_used, 0}));
     	event_state->oldmailboxid = mboxevent_toURL(mailbox);
     }
 out:

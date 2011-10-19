@@ -57,111 +57,70 @@
  * event types defined in RFC 5423 - Internet Message Store Events
  */
 enum  {
+    CancelledEvent      = (0),
     /* Message Addition and Deletion */
     MessageAppend       = (1<<0),
     MessageExpire       = (1<<1),
     MessageExpunge      = (1<<2),
     MessageNew          = (1<<3),
     vnd_cmu_MessageCopy = (1<<4), /* additional event type to notify IMAP COPY */
+    QuotaExceed         = (1<<5),
+    QuotaWithin         = (1<<6),
+    QuotaChange         = (1<<7),
     /* Message Flags */
-    MessageRead         = (1<<5),
-    MessageTrash        = (1<<6),
-    FlagsSet            = (1<<7),
-    FlagsClear          = (1<<8),
+    MessageRead         = (1<<8),
+    MessageTrash        = (1<<9),
+    FlagsSet            = (1<<10),
+    FlagsClear          = (1<<11),
     /* Access Accounting */
-    Login               = (1<<9),
-    Logout              = (1<<10),
+    Login               = (1<<12),
+    Logout              = (1<<13),
     /* Mailbox Management */
-    MailboxCreate       = (1<<11),
-    MailboxDelete       = (1<<12),
-    MailboxRename       = (1<<13),
-    MailboxSubscribe    = (1<<14),
-    MailboxUnSubscribe  = (1<<15)
+    MailboxCreate       = (1<<14),
+    MailboxDelete       = (1<<15),
+    MailboxRename       = (1<<16),
+    MailboxSubscribe    = (1<<17),
+    MailboxUnSubscribe  = (1<<18)
 };
 
-/*
- * event parameters defined in RFC 5423 - Internet Message Store Events
- */
-enum {
-    event_bodyStructure_idx = 0,
-    event_clientIP_idx,
-    event_clientPort_idx,
-    event_flagNames_idx,
-    event_mailboxID_idx,
-    event_messageContent_idx,
-    event_messageSize_idx,
-    event_messages_idx,
-    event_oldMailboxID_idx,
-    event_serverDomain_idx,
-    event_serverPort_idx,
-    event_service_idx,
-    event_timestamp_idx,
-    event_uidnext_idx,
-    event_uidset_idx,
-    event_user_idx,
-    /* extra event parameters not defined in the RFC */
-    event_vnd_cmu_host_idx,
-    event_vnd_cmu_midset_idx,
-    event_vnd_cmu_newMessages_idx,
-    event_vnd_cmu_oldUidset_idx
+#define MAX_PARAM 19
+
+enum event_param_type {
+    EVENT_PARAM_INT,
+    EVENT_PARAM_UINT,
+    EVENT_PARAM_QUOTAT,
+    EVENT_PARAM_STRING,
+    EVENT_PARAM_DYNSTRING /* must be freed */
 };
 
-/*
- * event parameters defined in RFC 5423 - Internet Message Store Events
- */
-enum event_param {
-    event_bodyStructure =        (1<<event_bodyStructure_idx),
-    event_clientIP =             (1<<event_clientIP_idx),
-    event_clientPort =           (1<<event_clientPort_idx),
-    event_flagNames =            (1<<event_flagNames_idx),
-    event_mailboxID =            (1<<event_mailboxID_idx),
-    event_messageContent =       (1<<event_messageContent_idx),
-    event_messageSize =          (1<<event_messageSize_idx),
-    event_messages =             (1<<event_messages_idx),
-    event_oldMailboxID =         (1<<event_oldMailboxID_idx),
-    event_serverDomain =         (1<<event_serverDomain_idx),
-    event_serverPort =           (1<<event_serverPort_idx),
-    event_service =              (1<<event_service_idx),
-    event_timestamp =            (1<<event_timestamp_idx),
-    event_uidnext =              (1<<event_uidnext_idx),
-    event_uidset =               (1<<event_uidset_idx),
-    event_user =                 (1<<event_user_idx),
-    event_vnd_cmu_host =         (1<<event_vnd_cmu_host_idx),
-    event_vnd_cmu_midset =       (1<<event_vnd_cmu_midset_idx),
-    event_vnd_cmu_newMessages =  (1<<event_vnd_cmu_newMessages_idx),
-    event_vnd_cmu_oldUidset =    (1<<event_vnd_cmu_oldUidset_idx)
+union event_param_value {
+    char *s;    /* string */
+    long i;     /* int */
+    uint32_t u; /* unsigned */
+    quota_t q;
 };
 
-/* event_state structure is a chained list to handle several events */
+struct event_parameter {
+    char *name;
+    const enum event_param_type t;
+    union event_param_value value;
+    int filled;
+};
+
 struct event_state {
-    int type;			/* event type */
-    int aborting;		/* don't send the notification */
+    int type;	/* event type */
 
-    /* standard event parameters */
+    /* array of event parameters */
+    struct event_parameter params[MAX_PARAM+1];
+
     struct imapurl *mailboxid; 	/* XXX translate mailbox name to external ? */
     struct imapurl *oldmailboxid;
 
-    char *bodystructure;
     strarray_t flagnames;
-    char *messagecontent;
-    char messagesize[21]; /* 32bits size until now */
-    char messages[21];
     struct timeval timestamp;
-    char uidnext[21];
     struct buf uidset;
-    const char *user;
-
-    /* come saslprops structure */
-    char *iplocalport;
-    char *ipremoteport;
-
-    /* private event parameters */
     struct buf midset;
-    char newmessages[21];
     struct buf olduidset;
-
-    /* formatted representation of event parameters */
-    const char *params[event_vnd_cmu_oldUidset_idx+1];
 
     struct event_state *next;
 };
@@ -191,11 +150,6 @@ void mboxevent_notify(struct event_state *event);
 void mboxevent_free(struct event_state **event);
 
 /*
- * Test if the given parameter must be filled for the given event type
- */
-int mboxevent_expected_params(int event_type, enum event_param param);
-
-/*
  * Add this set of system flags to flagNames parameter.
  * Exclude system flags present in event_exclude_flags setting.
  *
@@ -219,9 +173,17 @@ int mboxevent_add_usrflags(struct event_state *event, struct mailbox *mailbox,
 void mboxevent_add_flag(struct event_state *event, const char *flag);
 
 /*
+ * Extract data related to message store access accounting
+ */
+void mboxevent_extract_access(struct event_state *event,
+                              const char *serveraddr, const char *clientaddr,
+                              const char *userid);
+/*
  * Extract data from the given record to fill these event parameters :
  * - uidset from UID
- * - midset from Message-Id in ENVELOPE structure
+ * - vnd.cmu.midset from Message-Id in ENVELOPE structure
+ * - messageSize
+ * - bodyStructure
  *
  * Called once per message and always before mboxevent_extract_mailbox
  */
@@ -236,10 +198,15 @@ void mboxevent_extract_copied_record(struct event_state *event,
 				     struct mailbox *mailbox, uint32_t uid);
 
 /*
- * Extract message content to include with the event notification
+ * Extract message content to include with event notification
  */
 void mboxevent_extract_content(struct event_state *event,
                                struct index_record *record, FILE* content);
+
+/*
+ * Extract disk quota and disk usage to include with event notification
+ */
+void mboxevent_extract_quota(struct event_state *event, struct quota *quota);
 
 /*
  * Extract meta-data from the given mailbox to fill mailboxID event parameter and
