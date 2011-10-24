@@ -84,15 +84,16 @@
  * numbered to optimize the parsing of the notification message
  */
 enum event_param {
-    bodyStructure = 18,
+    bodyStructure = 19,
     clientAddress = 4, /* gather clientIP and clientPort together */
     diskQuota = 5,
     diskUsed = 6,
     flagNames = 15,
     mailboxID = 9,
-    messageContent = 19,
+    messageContent = 20,
     messageSize = 17,
     messages = 10,
+    modseq = 18,
     oldMailboxID = 7,
     serverAddress = 3, /* gather serverDomain and serverPort together */
     service = 2,
@@ -125,7 +126,7 @@ static struct event_state event_template =
     { "serverAddress", EVENT_PARAM_STRING, EVTVAL(char *, NULL), 0 },
     { "clientAddress", EVENT_PARAM_STRING, EVTVAL(char *, NULL), 0 },
     { "diskQuota", EVENT_PARAM_INT, EVTVAL(long, 0), 0 },
-    { "diskUsed", EVENT_PARAM_UINT, EVTVAL(uint32_t, 0), 0 },
+    { "diskUsed", EVENT_PARAM_UINT, EVTVAL(quota_t, 0), 0 },
     { "oldMailboxID", EVENT_PARAM_DYNSTRING, EVTVAL(char *, NULL), 0 },
     { "vnd.cmu.oldUidset", EVENT_PARAM_STRING, EVTVAL(char *, NULL), 0 },
     { "mailboxID", EVENT_PARAM_DYNSTRING, EVTVAL(char *, NULL), 0 },
@@ -137,6 +138,7 @@ static struct event_state event_template =
     { "flagNames", EVENT_PARAM_DYNSTRING, EVTVAL(char *, NULL), 0 },
     { "user", EVENT_PARAM_STRING, EVTVAL(char *, NULL), 0 },
     { "messageSize", EVENT_PARAM_UINT, EVTVAL(uint32_t, 0), 0 },
+    { "modseq", EVENT_PARAM_MODSEQT, EVTVAL(modseq_t, 0), 0 },
     /* always at end to let the parser to easily truncate this part */
     { "bodyStructure", EVENT_PARAM_DYNSTRING, EVTVAL(char *, NULL), 0 },
     { "messageContent", EVENT_PARAM_DYNSTRING, EVTVAL(char *, NULL), 0 }
@@ -146,7 +148,7 @@ static struct event_state event_template =
 };
 
 #if 0
-static char *properties_formatter(int event_type, const char **event_params);
+static char *properties_formatter(int event_type, struct event_parameter params[]);
 #endif
 static char *json_formatter(int event_type, struct event_parameter params[]);
 #ifndef NDEBUG
@@ -380,6 +382,10 @@ static int mboxevent_expected_params(int event_type, enum event_param param)
 	       (event_type & (MessageAppend|MessageNew));
     case messages:
 	if (!(extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_MESSAGES))
+	    return 0;
+	break;
+    case modseq:
+	if (!(extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_MODSEQ))
 	    return 0;
 	break;
     case oldMailboxID:
@@ -644,6 +650,22 @@ void mboxevent_extract_record(struct event_state *event, struct mailbox *mailbox
     if (!event)
 	return;
 
+    /* add modseq */
+    if (mboxevent_expected_params(event->type, modseq)) {
+	if (buf_len(&event->uidset) == 0) {
+	    FILL_PARAM(event, modseq, modseq_t, record->modseq);
+	}
+	else {
+	    /* From RFC 5423:
+	     * modseq May be included with any notification referring
+	     * to one message.
+	     *
+	     * thus cancel inclusion of modseq parameter
+	     */
+	    event->params[modseq].filled = 0;
+	}
+    }
+
     /* add UID to uidset */
     if (buf_len(&event->uidset) == 0)
 	buf_printf(&event->uidset, "%u", record->uid);
@@ -858,35 +880,59 @@ static const char *eventname(int type)
 }
 
 #if 0
-static char *properties_formatter(int event_type, const char **event_params)
+static char *properties_formatter(int event_type, struct event_parameter params[])
 {
     struct buf buffer = BUF_INITIALIZER;
+    char *val;
+    int param;
 
     buf_printf(&buffer, "version=%d\n", EVENT_VERSION);
     buf_printf(&buffer, "event=%s\n", eventname(event_type));
 
-    for (event = 0; event <= messageContent; event++) {
+    for (param = 0; param <= messageContent; param++) {
 
-	if (params[event].value == NULL)
+	if (!params[param].filled)
 	    continue;
 
-	switch (params[event].type) {
-	case INT_TYPE:
-	    buf_printf(&buffer, "%s=%d\n",
-	               params[event].name, params[event].value.i);
+	switch (param) {
+	case clientAddress:
+	    /* come from saslprops structure */
+	    val = params[clientAddress].value.s;
+	    buf_printf(&buffer, "clientIP=%.*s\n",
+	               (int)(strchr(val, ';') - val), val);
+	    buf_printf(&buffer, "clientPort=%s\n", strchr(val, ';') + 1);
 	    break;
-	case UINT_TYPE:
-	    buf_printf(&buffer, "%s=%u\n",
-	               params[event].name, params[event].value.u);
+	case serverAddress:
+	    /* come from saslprops structure */
+	    val = params[serverAddress].value.s;
+	    buf_printf(&buffer, "serverDomain=%.*s\n",
+	               (int)(strchr(val, ';') - val), val);
+	    buf_printf(&buffer, "serverPort=%s\n", strchr(val, ';') + 1);
 	    break;
-	case EVENT_PARAM_QUOTAT:
-	    buf_printf(&buffer, "%s=" UQUOTA_T_FMT "\n",
-	               params[param].name, params[param].value.q);
-	    break;
-	case STR_TYPE:
-	case STR_DYN_TYPE:
-	    buf_printf(&buffer, "%s=%s\n",
-	               params[event].name, params[event].value.s);
+	default:
+	    switch (params[param].t) {
+	    case EVENT_PARAM_INT:
+		buf_printf(&buffer, "%s=%ld\n",
+		           params[param].name, params[param].value.i);
+		break;
+	    case EVENT_PARAM_UINT:
+		buf_printf(&buffer, "%s=%u\n",
+		           params[param].name, params[param].value.u);
+		break;
+	    case EVENT_PARAM_QUOTAT:
+		buf_printf(&buffer, "%s=" UQUOTA_T_FMT "\n",
+		           params[param].name, params[param].value.q);
+		break;
+	    case EVENT_PARAM_MODSEQT:
+		buf_printf(&buffer, "%s=" MODSEQ_FMT "\n",
+		           params[param].name, params[param].value.m);
+		break;
+	    case EVENT_PARAM_STRING:
+	    case EVENT_PARAM_DYNSTRING:
+		buf_printf(&buffer, "%s=%s\n",
+		           params[param].name, params[param].value.s);
+		break;
+	    }
 	    break;
 	}
     }
@@ -894,6 +940,72 @@ static char *properties_formatter(int event_type, const char **event_params)
     return buf_release(&buffer);
 }
 #endif
+
+const char *hex_chars = "0123456789abcdef";
+
+static char *json_escape_str(const char *str)
+{
+    struct buf buffer = BUF_INITIALIZER;
+    int pos = 0, start_offset = 0;
+    unsigned char c;
+    char *text, seq[8];
+
+    do {
+	c = str[pos];
+	switch(c) {
+	case '\0':
+	    break;
+	case '\b':
+	    text = "\\b";
+	    break;
+	case '\n':
+	    text = "\\n";
+	    break;
+	case '\r':
+	    text = "\\r";
+	    break;
+	case '\t':
+	    text = "\\t";
+	    break;
+	case '"':
+	    text = "\\\"";
+	    break;
+	case '\\':
+	    text = "\\\\";
+	    break;
+	case '/':
+	    text = "\\/";
+	    break;
+	default:
+	    if(c < ' ') {
+		sprintf(seq, "\\u00%c%c", hex_chars[c >> 4], hex_chars[c & 0xf]);
+		text = seq;
+		break;
+	    }
+	    else {
+		pos++;
+		continue;
+	    }
+	}
+
+	/* we encounter a character to escape or reach the end of the string */
+	if (c) {
+	    if (pos - start_offset > 0) {
+		buf_appendmap(&buffer, str + start_offset, pos - start_offset);
+	    }
+
+	    buf_appendcstr(&buffer, text);
+	    start_offset = ++pos;
+	}
+    }
+    while(c);
+
+    if (pos - start_offset > 0) {
+	buf_appendmap(&buffer, str + start_offset, pos - start_offset);
+    }
+
+    return buf_release(&buffer);
+}
 
 static char *json_formatter(int event_type, struct event_parameter params[])
 {
@@ -910,19 +1022,19 @@ static char *json_formatter(int event_type, struct event_parameter params[])
 	    continue;
 
 	switch (param) {
-	case serverAddress:
-	    /* come from saslprops structure */
-	    val = params[serverAddress].value.s;
-	    buf_printf(&buffer, ",\"serverDomain\":\"%.*s\"",
-	               (int)(strchr(val, ';') - val), val);
-	    buf_printf(&buffer, ",\"serverPort\":%s", strchr(val, ';') + 1);
-	    break;
 	case clientAddress:
 	    /* come from saslprops structure */
 	    val = params[clientAddress].value.s;
 	    buf_printf(&buffer, ",\"clientIP\":\"%.*s\"",
 	               (int)(strchr(val, ';') - val), val);
 	    buf_printf(&buffer, ",\"clientPort\":%s", strchr(val, ';') + 1);
+	    break;
+	case serverAddress:
+	    /* come from saslprops structure */
+	    val = params[serverAddress].value.s;
+	    buf_printf(&buffer, ",\"serverDomain\":\"%.*s\"",
+	               (int)(strchr(val, ';') - val), val);
+	    buf_printf(&buffer, ",\"serverPort\":%s", strchr(val, ';') + 1);
 	    break;
 	case timestamp:
 	    stimestamp = params[timestamp].value.s;
@@ -948,13 +1060,18 @@ static char *json_formatter(int event_type, struct event_parameter params[])
 		buf_printf(&buffer, ",\"%s\":%u",
 		           params[param].name, params[param].value.u);
 		break;
+	    case EVENT_PARAM_MODSEQT:
+		buf_printf(&buffer, ",\"%s\":" MODSEQ_FMT,
+		           params[param].name, params[param].value.m);
+		break;
 	    case EVENT_PARAM_QUOTAT:
 		buf_printf(&buffer, ",\"%s\":" UQUOTA_T_FMT,
 		           params[param].name, params[param].value.q);
 		break;
 	    case EVENT_PARAM_STRING:
 	    case EVENT_PARAM_DYNSTRING:
-		buf_printf(&buffer, ",\"%s\":\"%s\"", params[param].name, (char *)params[param].value.s);
+		buf_printf(&buffer, ",\"%s\":\"%s\"",
+		           params[param].name, json_escape_str(params[param].value.s));
 		break;
 	    }
 	    break;
@@ -991,6 +1108,12 @@ static int filled_params(int event_type, struct event_state *event)
 			IMAP_ENUM_EVENT_CONTENT_INCLUSION_MODE_STANDARD)
 		    buf_appendcstr(&buffer, " messageContent");
 		break;
+	    case modseq:
+		/* modseq is not included if notification refers to several
+		 * messages */
+		if (event->mailboxid->uid)
+		    buf_appendcstr(&buffer, " modseq");
+		break;
 	    case uidset:
 		/* at least one UID must be found in mailboxID */
 		if (!event->mailboxid->uid)
@@ -1018,4 +1141,5 @@ static int filled_params(int event_type, struct event_state *event)
     buf_free(&buffer);
     return ret;
 }
+
 #endif

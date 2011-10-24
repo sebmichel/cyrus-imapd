@@ -83,20 +83,22 @@ enum  {
     MailboxUnSubscribe  = (1<<18)
 };
 
-#define MAX_PARAM 19
+#define MAX_PARAM 20 /* messageContent number that is always the last */
 
 enum event_param_type {
     EVENT_PARAM_INT,
     EVENT_PARAM_UINT,
+    EVENT_PARAM_MODSEQT,
     EVENT_PARAM_QUOTAT,
     EVENT_PARAM_STRING,
     EVENT_PARAM_DYNSTRING /* must be freed */
 };
 
 union event_param_value {
-    char *s;    /* string */
-    long i;     /* int */
-    uint32_t u; /* unsigned */
+    char *s;      /* string */
+    long i;       /* int */
+    uint32_t u; /* unsigned 32 bits */
+    modseq_t m; /* unsigned 64 bits */
     quota_t q;
 };
 
