@@ -83,7 +83,7 @@ enum  {
     MailboxUnSubscribe  = (1<<18)
 };
 
-#define MAX_PARAM 20 /* messageContent number that is always the last */
+#define MAX_PARAM 21 /* messageContent number that is always the last */
 
 enum event_param_type {
     EVENT_PARAM_INT,
@@ -165,7 +165,7 @@ int mboxevent_add_sysflags(struct event_state *event, bit32 sysflags);
  *
  * Return the total number of flags added until now
  */
-int mboxevent_add_usrflags(struct event_state *event, struct mailbox *mailbox,
+int mboxevent_add_usrflags(struct event_state *event, const struct mailbox *mailbox,
 			   bit32 *usrflags);
 
 /*
@@ -190,25 +190,26 @@ void mboxevent_extract_access(struct event_state *event,
  * Called once per message and always before mboxevent_extract_mailbox
  */
 void mboxevent_extract_record(struct event_state *event, struct mailbox *mailbox,
-			 struct index_record *record);
+                              struct index_record *record);
 
 /*
  * Fill event parameter about the copied message.
  * Called once per message and always before mboxevent_extract_mailbox
  */
 void mboxevent_extract_copied_record(struct event_state *event,
-				     struct mailbox *mailbox, uint32_t uid);
+				     const struct mailbox *mailbox, uint32_t uid);
 
 /*
  * Extract message content to include with event notification
  */
 void mboxevent_extract_content(struct event_state *event,
-                               struct index_record *record, FILE* content);
+                               const struct index_record *record, FILE* content);
 
 /*
- * Extract disk quota and disk usage to include with event notification
+ * Extract quota limit and quota usage to include with event notification
  */
-void mboxevent_extract_quota(struct event_state *event, struct quota *quota);
+void mboxevent_extract_quota(struct event_state *event, const struct quota *quota,
+                             enum quota_resource res);
 
 /*
  * Extract meta-data from the given mailbox to fill mailboxID event parameter and
@@ -229,6 +230,6 @@ void mboxevent_extract_mailbox(struct event_state *event, struct mailbox *mailbo
 /*
  * Return an IMAP URL that identify the given mailbox on the server
  */
-struct imapurl *mboxevent_toURL(struct mailbox *mailbox);
+struct imapurl *mboxevent_toURL(const struct mailbox *mailbox);
 
 #endif /* _MBOXEVENT_H */

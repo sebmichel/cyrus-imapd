@@ -2010,7 +2010,6 @@ HIDDEN int mailbox_commit_quota(struct mailbox *mailbox)
     int res;
     int changed = 0;
     quota_t quota_usage[QUOTA_NUMRESOURCES];
-    struct event_state *event_state = NULL;
 
     /* not dirty */
     if (!mailbox->quota_dirty)

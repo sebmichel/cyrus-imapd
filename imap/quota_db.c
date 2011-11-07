@@ -61,6 +61,7 @@
 #include "imap/imap_err.h"
 #include "mailbox.h"
 #include "mboxname.h"
+#include "mboxevent.h"
 #include "quota.h"
 #include "util.h"
 #include "xmalloc.h"
@@ -289,8 +290,18 @@ EXPORTED int quota_check(const struct quota *q,
 	return 0;
 
     lim = (quota_t)q->limits[res] * quota_units[res];
-    if (q->useds[res] + delta > lim)
+    if (q->useds[res] + delta > lim) {
+	struct event_state *event_state = NULL;
+
+	/* send a QuotaExceed event notification */
+	event_newstate(QuotaExceed, &event_state);
+	mboxevent_extract_quota(event_state, q, res);
+
+	mboxevent_notify(event_state);
+	mboxevent_free(&event_state);
+
 	return IMAP_QUOTA_EXCEEDED;
+    }
     return 0;
 }
 
@@ -445,6 +456,7 @@ EXPORTED int quota_update_useds(const char *quotaroot,
     struct quota q;
     struct txn *tid = NULL;
     int r = 0;
+    struct event_state *event_state = NULL;
 
     if (!quotaroot || !*quotaroot)
 	return IMAP_QUOTAROOT_NONEXISTENT;
@@ -456,14 +468,23 @@ EXPORTED int quota_update_useds(const char *quotaroot,
     if (!r) {
 	int res;
 	int cmp = 1;
+	quota_t oldused;
 	if (q.scanmbox) {
 	    cmp = cyrusdb_compar(qdb, mboxname, strlen(mboxname),
 				 q.scanmbox, strlen(q.scanmbox));
 	}
 	for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	    oldused = q.useds[res];
 	    quota_use(&q, res, diff[res]);
 	    if (cmp <= 0)
 		q.scanuseds[res] += diff[res];
+
+	    if (oldused >= (q.limits[res] * quota_units[res]) &&
+		q.useds[res] < (q.limits[res] * quota_units[res])) {
+		if (!event_state)
+		    event_newstate(QuotaWithin, &event_state);
+		mboxevent_extract_quota(event_state, &q, res);
+	    }
 	}
 	r = quota_write(&q, &tid);
     }
@@ -473,6 +494,7 @@ EXPORTED int quota_update_useds(const char *quotaroot,
 	goto out;
     }
     quota_commit(&tid);
+    mboxevent_notify(event_state);
 
 out:
     quota_free(&q);
@@ -482,6 +504,7 @@ out:
 	       diff[QUOTA_STORAGE], diff[QUOTA_MESSAGE],
 	       quotaroot, error_message(r));
     }
+    mboxevent_free(&event_state);
 
     return r;
 }

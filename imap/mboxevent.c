@@ -84,27 +84,28 @@
  * numbered to optimize the parsing of the notification message
  */
 enum event_param {
-    bodyStructure = 19,
+    bodyStructure = 20,
     clientAddress = 4, /* gather clientIP and clientPort together */
     diskQuota = 5,
     diskUsed = 6,
-    flagNames = 15,
+    flagNames = 16,
     mailboxID = 9,
-    messageContent = 20,
-    messageSize = 17,
-    messages = 10,
-    modseq = 18,
+    maxMessages = 10,
+    messageContent = 21,
+    messageSize = 18,
+    messages = 11,
+    modseq = 19,
     oldMailboxID = 7,
     serverAddress = 3, /* gather serverDomain and serverPort together */
     service = 2,
     timestamp = 1,
-    uidnext = 12,
-    uidset = 13,
-    user = 16,
+    uidnext = 13,
+    uidset = 14,
+    user = 17,
     /* below extra event parameters not defined in the RFC */
     vnd_cmu_host = 0,
-    vnd_cmu_midset = 14,
-    vnd_cmu_newMessages = 11,
+    vnd_cmu_midset = 15,
+    vnd_cmu_newMessages = 12,
     vnd_cmu_oldUidset = 8
 };
 
@@ -130,6 +131,7 @@ static struct event_state event_template =
     { "oldMailboxID", EVENT_PARAM_DYNSTRING, EVTVAL(char *, NULL), 0 },
     { "vnd.cmu.oldUidset", EVENT_PARAM_STRING, EVTVAL(char *, NULL), 0 },
     { "mailboxID", EVENT_PARAM_DYNSTRING, EVTVAL(char *, NULL), 0 },
+    { "maxMessages", EVENT_PARAM_INT, EVTVAL(long, 0), 0 },
     { "messages", EVENT_PARAM_UINT, EVTVAL(uint32_t, 0), 0 },
     { "vnd.cmu.newMessages", EVENT_PARAM_UINT, EVTVAL(uint32_t, 0), 0 },
     { "uidnext", EVENT_PARAM_UINT, EVTVAL(uint32_t, 0), 0 },
@@ -374,6 +376,8 @@ static int mboxevent_expected_params(int event_type, enum event_param param)
 	        (event_type & (MessageAppend|MessageNew)));
     case mailboxID:
 	return !(event_type & (Login|Logout));
+    case maxMessages:
+	return event_type & (QuotaExceed|QuotaWithin|QuotaChange);
     case messageContent:
 	return (extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_MESSAGECONTENT) &&
 	       (event_type & (MessageAppend|MessageNew));
@@ -381,6 +385,8 @@ static int mboxevent_expected_params(int event_type, enum event_param param)
 	return (extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_MESSAGESIZE) &&
 	       (event_type & (MessageAppend|MessageNew));
     case messages:
+	if (event_type & (QuotaExceed|QuotaWithin))
+	    return 1;
 	if (!(extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_MESSAGES))
 	    return 0;
 	break;
@@ -451,6 +457,11 @@ void mboxevent_notify(struct event_state *event)
     /* loop over the chained list of events */
     do {
 	if (event->type == CancelledEvent)
+	    goto next;
+
+	/* others quota are not supported by RFC 5423 */
+	if ((event->type & (QuotaExceed|QuotaWithin|QuotaChange)) &&
+	    !event->params[diskQuota].filled && !event->params[maxMessages].filled)
 	    goto next;
 
 	/* finish to fill event parameters structure */
@@ -597,7 +608,7 @@ int mboxevent_add_sysflags(struct event_state *event, bit32 sysflags)
 }
 
 
-int mboxevent_add_usrflags(struct event_state *event, struct mailbox *mailbox,
+int mboxevent_add_usrflags(struct event_state *event, const struct mailbox *mailbox,
 			   bit32 *usrflags)
 {
     int flag;
@@ -643,7 +654,7 @@ void mboxevent_extract_access(struct event_state *event,
 }
 
 void mboxevent_extract_record(struct event_state *event, struct mailbox *mailbox,
-			      struct index_record *record)
+                              struct index_record *record)
 {
     const char *msgid = NULL;
 
@@ -696,7 +707,7 @@ void mboxevent_extract_record(struct event_state *event, struct mailbox *mailbox
 }
 
 void mboxevent_extract_copied_record(struct event_state *event,
-				     struct mailbox *mailbox, uint32_t uid)
+				     const struct mailbox *mailbox, uint32_t uid)
 {
     if (!event)
 	return;
@@ -709,7 +720,7 @@ void mboxevent_extract_copied_record(struct event_state *event,
 }
 
 void mboxevent_extract_content(struct event_state *event,
-                               struct index_record *record, FILE* content)
+                               const struct index_record *record, FILE* content)
 {
     const char *base = NULL;
     unsigned long len = 0;
@@ -770,20 +781,46 @@ void mboxevent_extract_content(struct event_state *event,
     map_free(&base, &len);
 }
 
-void mboxevent_extract_quota(struct event_state *event, struct quota *quota)
+void mboxevent_extract_quota(struct event_state *event, const struct quota *quota,
+                             enum quota_resource res)
 {
     if (!event)
 	return;
 
-    if (mboxevent_expected_params(event->type, diskQuota)) {
-	FILL_PARAM(event, diskQuota, long, quota->limit);
+    switch(res) {
+    case QUOTA_STORAGE:
+	if (mboxevent_expected_params(event->type, diskQuota)) {
+	    FILL_PARAM(event, diskQuota, long, quota->limits[res]);
+	}
+	if (mboxevent_expected_params(event->type, diskUsed)) {
+	    FILL_PARAM(event, diskUsed, quota_t, quota->useds[res]/1024);
+	}
+	break;
+    case QUOTA_MESSAGE:
+	FILL_PARAM(event, maxMessages, long, quota->limits[res]);
+	FILL_PARAM(event, messages, long, quota->useds[res]);
+	break;
+    default:
+	/* others quota are not supported by RFC 5423 */
+	break;
     }
-    if (mboxevent_expected_params(event->type, diskUsed)) {
-	FILL_PARAM(event, diskUsed, quota_t, quota->used/1024);
+
+    /* From RFC 5423 :
+     * The parameters SHOULD include at least the relevant user
+     * and quota and, optionally, the mailbox.
+     *
+     * It seems that it does not correspond to the concept of
+     * quota root specified in RFC 2087. Thus we fill mailboxID with quota root
+     */
+    if (!event->mailboxid && event->type & (QuotaExceed|QuotaWithin|QuotaChange)) {
+	event->mailboxid = xzmalloc(sizeof(struct imapurl));
+	event->mailboxid->server = config_servername;
+	event->mailboxid->mailbox = strdup(quota->root);
     }
 }
 
-void mboxevent_extract_mailbox(struct event_state *event, struct mailbox *mailbox)
+void mboxevent_extract_mailbox(struct event_state *event,
+                               struct mailbox *mailbox)
 {
     if (!event)
 	return;
@@ -820,7 +857,7 @@ void mboxevent_extract_mailbox(struct event_state *event, struct mailbox *mailbo
     }
 }
 
-struct imapurl *mboxevent_toURL(struct mailbox *mailbox)
+struct imapurl *mboxevent_toURL(const struct mailbox *mailbox)
 {
     struct imapurl *url = xzmalloc(sizeof(struct imapurl));
     url->server = config_servername;
@@ -920,7 +957,7 @@ static char *properties_formatter(int event_type, struct event_parameter params[
 		           params[param].name, params[param].value.u);
 		break;
 	    case EVENT_PARAM_QUOTAT:
-		buf_printf(&buffer, "%s=" UQUOTA_T_FMT "\n",
+		buf_printf(&buffer, "%s=" QUOTA_T_FMT "\n",
 		           params[param].name, params[param].value.q);
 		break;
 	    case EVENT_PARAM_MODSEQT:
@@ -1065,7 +1102,7 @@ static char *json_formatter(int event_type, struct event_parameter params[])
 		           params[param].name, params[param].value.m);
 		break;
 	    case EVENT_PARAM_QUOTAT:
-		buf_printf(&buffer, ",\"%s\":" UQUOTA_T_FMT,
+		buf_printf(&buffer, ",\"%s\":" QUOTA_T_FMT,
 		           params[param].name, params[param].value.q);
 		break;
 	    case EVENT_PARAM_STRING:
@@ -1095,12 +1132,18 @@ static int filled_params(int event_type, struct event_state *event)
 	if (mboxevent_expected_params(event_type, param) &&
 		!event->params[param].filled) {
 	    switch (param) {
+	    case diskQuota:
+		return event->params[maxMessages].filled;
+	    case diskUsed:
+		return event->params[messages].filled;
 	    case flagNames:
 		/* flagNames may be included with MessageAppend and MessageNew
 		 * also we don't expect it here. */
 		if (!(event_type & (MessageAppend|MessageNew)))
 		    buf_appendcstr(&buffer, " flagNames");
 		break;
+	    case maxMessages:
+		return event->params[diskQuota].filled;
 	    case messageContent:
 		/* messageContent is not included in standard mode if the size
 		 * of the message exceed the limit */
@@ -1108,6 +1151,8 @@ static int filled_params(int event_type, struct event_state *event)
 			IMAP_ENUM_EVENT_CONTENT_INCLUSION_MODE_STANDARD)
 		    buf_appendcstr(&buffer, " messageContent");
 		break;
+	    case messages:
+		return event->params[diskUsed].filled;
 	    case modseq:
 		/* modseq is not included if notification refers to several
 		 * messages */

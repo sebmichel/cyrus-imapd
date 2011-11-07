@@ -127,20 +127,6 @@ EXPORTED int append_check(const char *name,
     if (quotacheck)
 	r = mailbox_quota_check(mailbox, quotacheck);
 
-    if (r == IMAP_QUOTA_EXCEEDED) {
-	struct event_state *event_state = NULL;
-
-	/* send a QuotaExceed event notification */
-	if (event_newstate(QuotaExceed, &event_state)) {
-	    mboxevent_extract_mailbox(event_state, mailbox);
-	    mboxevent_extract_quota(event_state, &q);
-
-	    mboxevent_notify(event_state);
-	    mboxevent_free(&event_state);
-	}
-
-    }
-
 done:
     mailbox_close(&mailbox);
 
@@ -199,18 +185,6 @@ HIDDEN int append_setup_mbox(struct appendstate *as, struct mailbox *mailbox,
     if (quotacheck) {
 	r = mailbox_quota_check(as->mailbox, quotacheck);
 	if (r) {
-	    if (r == IMAP_QUOTA_EXCEEDED) {
-		struct event_state *event_state = NULL;
-
-		/* send a QuotaExceed event notification */
-		if (event_newstate(QuotaExceed, &event_state)) {
-		    mboxevent_extract_mailbox(event_state, as->mailbox);
-		    mboxevent_extract_quota(event_state, &q);
-
-		    mboxevent_notify(event_state);
-		    mboxevent_free(&event_state);
-		}
-	    }
 	    mailbox_close(&as->mailbox);
 	    return r;
 	}
@@ -1040,7 +1014,10 @@ out:
     mboxevent_extract_mailbox(event_state, mailbox);
     /* quota usage could be different due to concurrent access on quota DB */
     mboxevent_extract_quota(event_state,
-                            &((struct quota ) {NULL, mailbox->i.quota_mailbox_used, 0}));
+                            &((struct quota ) {NULL,
+					       {mailbox->i.quota_mailbox_used, 0, 0 },
+					       { 0, 0, 0 }, { 0, 0, 0 } }),
+			    QUOTA_STORAGE);
 
     return 0;
 }
@@ -1156,7 +1133,10 @@ out:
     mboxevent_extract_mailbox(event_state, mailbox);
     /* quota usage could be different due to concurrent access on quota DB */
     mboxevent_extract_quota(event_state,
-                            &((struct quota) {NULL, mailbox->i.quota_mailbox_used, 0}));
+                            &((struct quota ) {NULL,
+					       {mailbox->i.quota_mailbox_used, 0, 0 },
+					       { 0, 0, 0 }, { 0, 0, 0 } }),
+			    QUOTA_STORAGE);
 
     return 0;
 }
@@ -1355,7 +1335,10 @@ EXPORTED int append_copy(struct mailbox *mailbox,
 	mboxevent_extract_mailbox(event_state, as->mailbox);
 	/* quota usage could be different due to concurrent access on quota DB */
 	mboxevent_extract_quota(event_state,
-	                        &((struct quota) {NULL, as->mailbox->i.quota_mailbox_used, 0}));
+	                        &((struct quota ) {NULL,
+						   {as->mailbox->i.quota_mailbox_used, 0, 0 },
+						   { 0, 0, 0 }, { 0, 0, 0 } }),
+				QUOTA_STORAGE);
     	event_state->oldmailboxid = mboxevent_toURL(mailbox);
     }
 out:

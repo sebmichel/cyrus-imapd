@@ -2522,8 +2522,8 @@ EXPORTED int mboxlist_setquotas(const char *root,
     int r;
     int res;
     struct txn *tid = NULL;
-    struct event_state *event_state = NULL;
-    int underquota = 0;
+    struct event_state *quotachange_state = NULL;
+    struct event_state *quotawithin_state = NULL;
 
     if (!root[0] || root[0] == '.' || strchr(root, '/')
 	|| strchr(root, '*') || strchr(root, '%') || strchr(root, '?')) {
@@ -2533,18 +2533,37 @@ EXPORTED int mboxlist_setquotas(const char *root,
     quota_init(&q, root);
     r = quota_read(&q, &tid, 1);
 
-    if (q.limit >= 0 && q.used >= ((uquota_t) q.limit * QUOTA_UNITS) &&
-	(q.used < ((uquota_t) newquota * QUOTA_UNITS) || newquota == -1))
-	underquota = 1;
-
     if (!r) {
 	int changed = 0;
+	int underquota;
 
 	/* has it changed? */
 	for (res = 0 ; res < QUOTA_NUMRESOURCES ; res++) {
 	    if (q.limits[res] != newquotas[res]) {
+		underquota = 0;
+
+		/* prepare a QuotaChange event notification */
+		if (!quotachange_state)
+		    quotachange_state = event_newstate(QuotaChange,
+		                                       &quotachange_state);
+
+		/* prepare a QuotaWithin event notification if now under quota */
+		if (q.limits[res] >= 0 &&
+			q.useds[res] >= ((quota_t)q.limits[res] * quota_units[res]) &&
+			(q.useds[res] < ((quota_t)newquotas[res] * quota_units[res])
+				|| newquotas[res] == -1)) {
+		    if (!quotawithin_state)
+			quotawithin_state = event_newstate(QuotaWithin,
+			                                   &quotachange_state);
+		    underquota++;
+		}
+
 		q.limits[res] = newquotas[res];
 		changed++;
+
+		mboxevent_extract_quota(quotachange_state, &q, res);
+		if (underquota)
+		    mboxevent_extract_quota(quotawithin_state, &q, res);
 	    }
 	}
 	if (changed)
@@ -2602,6 +2621,13 @@ EXPORTED int mboxlist_setquotas(const char *root,
     r = quota_write(&q, &tid);
     if (r) goto done;
 
+    /* prepare a QuotaChange event notification */
+    quotachange_state = event_newstate(QuotaChange, &quotachange_state);
+    for (res = 0 ; res < QUOTA_NUMRESOURCES ; res++) {
+    	if (q.limits[res] != QUOTA_UNLIMITED)
+    	    mboxevent_extract_quota(quotachange_state, &q, res);
+    }
+
     quota_commit(&tid);
 
     /* recurse through mailboxes, setting the quota and finding
@@ -2621,29 +2647,11 @@ done:
     if (!r) {
 	sync_log_quota(root);
 
-	/* send a QuotaChange event notification */
-	/* XXX avoid to duplicate code as below */
-	if (event_newstate(QuotaChange, &event_state)) {
-	    event_state->mailboxid = xzmalloc(sizeof(struct imapurl));
-	    event_state->mailboxid->server = config_servername;
-	    event_state->mailboxid->mailbox = strdup(root);
-	    mboxevent_extract_quota(event_state, &q);
-
-	    mboxevent_notify(event_state);
-	    mboxevent_free(&event_state);
-	}
-	/* send a QuotaWithin event notification */
-	if (underquota && event_newstate(QuotaWithin, &event_state)) {
-	    event_state->mailboxid = xzmalloc(sizeof(struct imapurl));
-	    event_state->mailboxid->server = config_servername;
-	    event_state->mailboxid->mailbox = strdup(root);
-	    mboxevent_extract_quota(event_state, &q);
-
-	    mboxevent_notify(event_state);
-	    mboxevent_free(&event_state);
-	}
+	/* send QuotaChange and QuotaWithin event notifications */
+	mboxevent_notify(quotachange_state);
     }
 
+    mboxevent_free(&quotachange_state);
     return r;
 }
 
