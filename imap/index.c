@@ -214,7 +214,7 @@ void index_closemailbox(struct mailbox *mailbox)
 	    map_free(&index_base, &index_len); 
 	if (cache_dirty)
 	    map_free(&cache_base, &cache_len); 
-	index_dirty = cache_dirty = index_len = cache_end = 0;
+	index_dirty = cache_dirty = index_len = cache_len = cache_end = 0;
     }
 }
 
