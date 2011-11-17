@@ -214,7 +214,7 @@ void index_closemailbox(struct mailbox *mailbox)
 	    map_free(&index_base, &index_len); 
 	if (cache_dirty)
 	    map_free(&cache_base, &cache_len); 
-	index_dirty = cache_dirty = index_len = cache_end = 0;
+	index_dirty = cache_dirty = index_len = cache_len = cache_end = 0;
     }
 }
 
@@ -2452,7 +2452,7 @@ static void index_fetchflags(struct mailbox *mailbox,
 	    flagmask = user_flags[flag/32];
 	}
 	if (!mailbox->flagname[flag] && (flagmask & (1<<(flag & 31)))) {
-	    mailbox_read_header(mailbox);
+	    mailbox_reload_header(mailbox);
 	    index_listflags(mailbox);
 	    break;
 	}
@@ -3594,7 +3594,7 @@ void *rock;
 	    flagmask = USER_FLAGS(msgno,userflag/32);
 	}
 	if (!mailbox->flagname[userflag] && (flagmask & (1<<(userflag&31)))) {
-	    mailbox_read_header(mailbox);
+	    mailbox_reload_header(mailbox);
 	    index_listflags(mailbox);
 	    break;
 	}
