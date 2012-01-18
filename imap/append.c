@@ -1111,8 +1111,6 @@ EXPORTED int append_fromstream(struct appendstate *as, struct body **body,
     if (flags) {
 	r = append_apply_flags(as, event_state, &record, flags);
 	if (r) goto out;
-
-	mboxevent_add_flag(event_state, flag[i]);
     }
 
     /* Write out index file entry; if we abort later, it's not
