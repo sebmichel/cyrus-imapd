@@ -1016,7 +1016,7 @@ out:
     mboxevent_extract_quota(event_state,
                             &((struct quota ) {NULL,
 					       {mailbox->i.quota_mailbox_used, 0, 0 },
-					       { 0, 0, 0 }, { 0, 0, 0 } }),
+					       { 0, 0, 0 }, NULL, { 0, 0, 0 } }),
 			    QUOTA_STORAGE);
 
     return 0;
@@ -1133,7 +1133,7 @@ out:
     mboxevent_extract_quota(event_state,
                             &((struct quota ) {NULL,
 					       {mailbox->i.quota_mailbox_used, 0, 0 },
-					       { 0, 0, 0 }, { 0, 0, 0 } }),
+					       { 0, 0, 0 }, NULL, { 0, 0, 0 } }),
 			    QUOTA_STORAGE);
 
     return 0;
@@ -1335,7 +1335,7 @@ EXPORTED int append_copy(struct mailbox *mailbox,
 	mboxevent_extract_quota(event_state,
 	                        &((struct quota ) {NULL,
 						   {as->mailbox->i.quota_mailbox_used, 0, 0 },
-						   { 0, 0, 0 }, { 0, 0, 0 } }),
+						   { 0, 0, 0 }, NULL, { 0, 0, 0 } }),
 				QUOTA_STORAGE);
     	event_state->oldmailboxid = mboxevent_toURL(mailbox);
     }
