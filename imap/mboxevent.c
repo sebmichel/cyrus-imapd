@@ -642,6 +642,11 @@ void mboxevent_extract_access(struct event_state *event,
     if (!event)
 	return;
 
+    /* only notify Logout after successful Login */
+    if (!userid && event->type & Logout) {
+	event->type = CancelledEvent;
+    }
+
     if (serveraddr && mboxevent_expected_params(event->type, serverAddress)) {
 	FILL_PARAM(event, serverAddress, char *, serveraddr);
     }
