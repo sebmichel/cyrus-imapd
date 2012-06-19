@@ -461,11 +461,6 @@ Blank lines and lines beginning with ``#'' are ignored.
 { "event_notifspam", 1, SWITCH }
 /* Enable event notification for email rated as spam */
 
-{ "event_timestamp_format", "iso8601", ENUM("iso8601", "epoch") }
-/* Format event timestamp in ISO 8601 format  
-   or print the number of seconds since the Epoch (UTC)
-   both with fractions of second */ 
-
 { "eventnotifier", NULL, STRING }
 /* Notifyd(8) method to use for "EVENT" notifications which are based on
    the RFC 5423.  If not set, "EVENT" notifications are disabled. */

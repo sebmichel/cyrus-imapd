@@ -428,6 +428,7 @@ static int mboxevent_expected_params(int event_type, enum event_param param)
     return MESSAGE_EVENTS(event_type);
 }
 
+#define TIMESTAMP_MAX 32
 void mboxevent_notify(struct event_state *event)
 {
     char url[MAX_MAILBOX_PATH+1];
@@ -435,7 +436,7 @@ void mboxevent_notify(struct event_state *event)
     int type;
     struct event_state *next;
     char *formatted_message;
-    char stimestamp[30];
+    char stimestamp[TIMESTAMP_MAX+1];
 
     /* nothing to notify */
     if (!event)
@@ -505,20 +506,8 @@ void mboxevent_notify(struct event_state *event)
 	}
 
 	if (mboxevent_expected_params(event->type, timestamp)) {
-	    switch (config_getenum(IMAPOPT_EVENT_TIMESTAMP_FORMAT)) {
-	    case IMAP_ENUM_EVENT_TIMESTAMP_FORMAT_EPOCH :
-		sprintf(stimestamp, "%ld%03ld\n", event->timestamp.tv_sec,
-		        event->timestamp.tv_usec ? (event->timestamp.tv_usec/1000) : 0);
-		break;
-	    case IMAP_ENUM_EVENT_TIMESTAMP_FORMAT_ISO8601 :
-		time_to_iso8601(event->timestamp.tv_sec,
-		                event->timestamp.tv_usec/1000,
-		                stimestamp, sizeof(stimestamp));
-		break;
-	    default:
-		/* never happen */
-		break;
-	    }
+	    timeval_to_iso8601(&event->timestamp, timeval_ms,
+	                       stimestamp, sizeof(stimestamp));
 	    FILL_PARAM(event, timestamp, char *, stimestamp);
 	}
 
@@ -1052,7 +1041,6 @@ static char *json_escape_str(const char *str)
 static char *json_formatter(int event_type, struct event_parameter params[])
 {
     struct buf buffer = BUF_INITIALIZER;
-    const char *stimestamp;
     char *val;
     int param;
 
@@ -1077,20 +1065,6 @@ static char *json_formatter(int event_type, struct event_parameter params[])
 	    buf_printf(&buffer, ",\"serverDomain\":\"%.*s\"",
 	               (int)(strchr(val, ';') - val), val);
 	    buf_printf(&buffer, ",\"serverPort\":%s", strchr(val, ';') + 1);
-	    break;
-	case timestamp:
-	    stimestamp = params[timestamp].value.s;
-	    switch (config_getenum(IMAPOPT_EVENT_TIMESTAMP_FORMAT)) {
-	    case IMAP_ENUM_EVENT_TIMESTAMP_FORMAT_EPOCH :
-		buf_printf(&buffer, ",\"timestamp\":%s", stimestamp);
-		break;
-	    case IMAP_ENUM_EVENT_TIMESTAMP_FORMAT_ISO8601 :
-		buf_printf(&buffer, ",\"timestamp\":\"%s\"", stimestamp);
-		break;
-	    default:
-		/* never happen */
-		break;
-	    }
 	    break;
 	default:
 	    switch (params[param].t) {
