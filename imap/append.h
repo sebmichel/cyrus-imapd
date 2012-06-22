@@ -96,7 +96,7 @@ struct appendstate {
 
     /* one event notification to send per appended message */
     int event_type;
-    struct event_state *eventstates;
+    struct mboxevent *mboxevents;
 };
 
 /* add helper function to determine uid range appended? */

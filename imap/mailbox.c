@@ -2761,7 +2761,7 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
     int numexpunged = 0;
     uint32_t recno;
     struct index_record record;
-    struct event_state *event_state = NULL;
+    struct mboxevent *mboxevent = NULL;
 
     assert(mailbox_index_islocked(mailbox, 1));
 
@@ -2772,7 +2772,7 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
     }
 
     if (event_type)
-	event_newstate(event_type, &event_state);
+	mboxevent = mboxevent_new(event_type);
 
     if (!decideproc) decideproc = expungedeleted;
 
@@ -2793,7 +2793,7 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	    r = mailbox_rewrite_index_record(mailbox, &record);
 	    if (r) return IMAP_IOERROR;
 
-	    mboxevent_extract_record(event_state, mailbox, &record);
+	    mboxevent_extract_record(mboxevent, mailbox, &record);
 	}
     }
 
@@ -2802,11 +2802,11 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	       numexpunged, mailbox->name);
 
 	/* send or abort the MessageExpunge or MessageExpire event notification */
-	mboxevent_extract_mailbox(event_state, mailbox);
-	mboxevent_notify(event_state);
+	mboxevent_extract_mailbox(mboxevent, mailbox);
+	mboxevent_notify(mboxevent);
     }
 
-    mboxevent_free(&event_state);
+    mboxevent_free(&mboxevent);
 
     if (nexpunged) *nexpunged = numexpunged;
 

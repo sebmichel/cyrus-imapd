@@ -449,8 +449,9 @@ Blank lines and lines beginning with ``#'' are ignored.
 { "event_exclude_flags", NULL, STRING }
 /* Don't send event notification for given IMAP flag(s) */
 
-{ "event_exclude_folders", NULL, STRING }
-/* Don't send event notification for given folder(s). Set ALL for any folder */
+{ "event_exclude_specialuse", NULL, STRING }
+/* Don't send event notification for folder with given special-use attributes. 
+   Set ALL for any folder */
 
 { "event_extra_params", "timestamp", BITFIELD("bodyStructure", "clientAddress", "diskUsed", "flagNames", "messageContent", "messageSize", "messages", "modseq", "service", "timestamp", "uidnext", "vnd.cmu.host", "vnd.cmu.midset", "vnd.cmu.newMessages") }
 /* Space-separated list of extra parameters to add to any appropriated event. */ 

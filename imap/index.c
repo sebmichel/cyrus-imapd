@@ -282,7 +282,7 @@ EXPORTED int index_expunge(struct index_state *state, char *sequence,
     /* XXX - earlier list if the sequence names UIDs that don't exist? */
     seq = _parse_sequence(state, sequence, 1);
 
-    event_newstate(MessageExpunge, &state->eventstate);
+    state->mboxevent = mboxevent_new(EVENT_MESSAGE_EXPUNGE);
 
     for (msgno = 1; msgno <= state->exists; msgno++) {
 	im = &state->map[msgno-1];
@@ -311,16 +311,16 @@ EXPORTED int index_expunge(struct index_state *state, char *sequence,
 
 	if (r) break;
 
-	mboxevent_extract_record(state->eventstate, state->mailbox, &im->record);
+	mboxevent_extract_record(state->mboxevent, state->mailbox, &im->record);
     }
 
     seqset_free(seq);
 
     /* send the MessageExpunge event notification for "immediate", "default"
      * and "delayed" expunge */
-    mboxevent_extract_mailbox(state->eventstate, state->mailbox);
-    mboxevent_notify(state->eventstate);
-    mboxevent_free(&state->eventstate);
+    mboxevent_extract_mailbox(state->mboxevent, state->mailbox);
+    mboxevent_notify(state->mboxevent);
+    mboxevent_free(&state->mboxevent);
 
     /* unlock before responding */
     index_unlock(state);
@@ -840,7 +840,7 @@ static int _fetch_setseen(struct index_state *state, uint32_t msgno)
     state->seen_dirty = 1;
     im->isseen = 1;
 
-    mboxevent_extract_record(state->eventstate, state->mailbox, &im->record);
+    mboxevent_extract_record(state->mboxevent, state->mailbox, &im->record);
 
     /* RFC2060 says:
      * The \Seen flag is implicitly set; if this causes
@@ -936,7 +936,7 @@ EXPORTED int index_fetch(struct index_state *state,
 
     /* set the \Seen flag if necessary - while we still have the lock */
     if (fetchargs->fetchitems & FETCH_SETSEEN && !state->examining) {
-	event_newstate(MessageRead, &state->eventstate);
+	state->mboxevent = mboxevent_new(EVENT_MESSAGE_READ);
 
 	for (msgno = 1; msgno <= state->exists; msgno++) {
 	    im = &state->map[msgno-1];
@@ -948,9 +948,9 @@ EXPORTED int index_fetch(struct index_state *state,
 	}
 
 	/* send the MessageRead event notification */
-	mboxevent_extract_mailbox(state->eventstate, state->mailbox);
-	mboxevent_notify(state->eventstate);
-	mboxevent_free(&state->eventstate);
+	mboxevent_extract_mailbox(state->mboxevent, state->mailbox);
+	mboxevent_notify(state->mboxevent);
+	mboxevent_free(&state->mboxevent);
     }
 
     if (fetchargs->vanished) {
@@ -998,7 +998,7 @@ EXPORTED int index_store(struct index_state *state, char *sequence,
     struct seqset *seq;
     struct index_map *im;
     const strarray_t *flags = &storeargs->flags;
-    struct event_state *flagsset_state, *flagsclear_state;
+    struct mboxevent *flagsset_state, *flagsclear_state;
 
     /* First pass at checking permission */
     if ((storeargs->seen && !(state->myrights & ACL_SETSEEN)) ||
@@ -1022,8 +1022,8 @@ EXPORTED int index_store(struct index_state *state, char *sequence,
 
     storeargs->update_time = time((time_t *)0);
 
-    flagsset_state = event_newstate(FlagsSet, &state->eventstate);
-    flagsclear_state = event_newstate(FlagsClear, &state->eventstate);
+    flagsset_state = mboxevent_enqueue(EVENT_FLAGS_SET, &state->mboxevent);
+    flagsclear_state = mboxevent_enqueue(EVENT_FLAGS_CLEAR, &state->mboxevent);
 
     for (msgno = 1; msgno <= state->exists; msgno++) {
 	im = &state->map[msgno-1];
@@ -1071,8 +1071,8 @@ EXPORTED int index_store(struct index_state *state, char *sequence,
      * and FlagsSet events */
     mboxevent_extract_mailbox(flagsset_state, state->mailbox);
     mboxevent_extract_mailbox(flagsclear_state, state->mailbox);
-    mboxevent_notify(state->eventstate);
-    mboxevent_free(&state->eventstate);
+    mboxevent_notify(state->mboxevent);
+    mboxevent_free(&state->mboxevent);
 
 out:
     if (storeargs->operation == STORE_ANNOTATION && r)
@@ -1693,7 +1693,7 @@ index_copy(struct index_state *state,
 
     r = append_setup_mbox(&appendstate, destmailbox, state->userid,
 			  state->authstate, ACL_INSERT,
-			  qptr, namespace, isadmin, vnd_cmu_MessageCopy);
+			  qptr, namespace, isadmin, EVENT_MESSAGE_COPY);
     if (r) return r;
 
     docopyuid = (appendstate.myrights & ACL_READ);
@@ -3269,30 +3269,30 @@ static int index_storeflag(struct index_state *state, uint32_t msgno,
      * cases we will send false positive FlagsSet and false negative FlagsClear */
 
     /* some flags are added */
-    if (state->eventstate) {
-	struct event_state *flagsset_state = state->eventstate;
+    if (state->mboxevent) {
+	struct mboxevent *flagsset_state = state->mboxevent;
 
 	memset(newusr, 0, sizeof(newusr));
 	for (i = 0; i < (MAX_USER_FLAGS/32); i++) {
 	    newusr[i] |= (~oldusr[i] & im->record.user_flags[i]);
 	}
 
-	if (mboxevent_add_sysflags(flagsset_state, ~old & im->record.system_flags)|
-	    mboxevent_add_usrflags(flagsset_state, state->mailbox, newusr))
+	if (mboxevent_add_system_flags(flagsset_state, ~old & im->record.system_flags)|
+	    mboxevent_add_user_flags(flagsset_state, state->mailbox, newusr))
 	    mboxevent_extract_record(flagsset_state, state->mailbox, &im->record);
     }
 
     /* some flags are removed */
-    if (state->eventstate) {
-	struct event_state *flagsclear_state = state->eventstate->next;
+    if (state->mboxevent) {
+	struct mboxevent *flagsclear_state = state->mboxevent->next;
 
 	memset(newusr, 0, sizeof(newusr));
 	for (i = 0; i < (MAX_USER_FLAGS/32); i++) {
 	    newusr[i] |= (oldusr[i] & ~im->record.user_flags[i]);
 	}
 
-	if (mboxevent_add_sysflags(flagsclear_state, old & ~im->record.system_flags)|
-	    mboxevent_add_usrflags(flagsclear_state, state->mailbox, newusr))
+	if (mboxevent_add_system_flags(flagsclear_state, old & ~im->record.system_flags)|
+	    mboxevent_add_user_flags(flagsclear_state, state->mailbox, newusr))
 	    mboxevent_extract_record(flagsclear_state, state->mailbox, &im->record);
     }
 

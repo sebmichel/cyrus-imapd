@@ -544,7 +544,7 @@ int deliver_mailbox(FILE *f,
 
     r = append_setup(&as, mailboxname,
 		     authuser, authstate, acloverride ? 0 : ACL_POST, 
-		     qdiffs, NULL, 0, MessageNew);
+		     qdiffs, NULL, 0, EVENT_MESSAGE_NEW);
     if (r) return r;
 
     /* check for duplicate message */

@@ -755,7 +755,7 @@ EXPORTED int mboxlist_createmailbox(const char *name, int mbtype,
 			   const char *partition, 
 			   int isadmin, const char *userid, 
 			   struct auth_state *auth_state,
-			   struct event_state *event_state,
+			   struct mboxevent *mboxevent,
 			   int localonly, int forceuser, int dbonly,
 			   struct dlist *extargs)
 {
@@ -770,7 +770,7 @@ EXPORTED int mboxlist_createmailbox(const char *name, int mbtype,
 				    forceuser, dbonly, &mailbox, extargs);
 
     if (!r) {
-	mboxevent_extract_mailbox(event_state, mailbox);
+	mboxevent_extract_mailbox(mboxevent, mailbox);
 	mailbox_close(&mailbox);
     }
     return r;
@@ -907,7 +907,7 @@ EXPORTED int
 mboxlist_delayed_deletemailbox(const char *name, int isadmin,
 			       const char *userid,
 			       struct auth_state *auth_state,
-			       struct event_state *event_state, int checkacl,
+			       struct mboxevent *mboxevent, int checkacl,
 			       int force)
 {
     struct mboxlist_entry *mbentry = NULL;
@@ -965,7 +965,7 @@ mboxlist_delayed_deletemailbox(const char *name, int isadmin,
     r = mboxlist_renamemailbox((char *)name, newname, mbentry->partition,
 			       0 /* uidvalidity */,
                                1 /* isadmin */, userid,
-                               auth_state, event_state, force, 1);
+                               auth_state, mboxevent, force, 1);
 
     mboxlist_entry_free(&mbentry);
 
@@ -988,7 +988,7 @@ mboxlist_delayed_deletemailbox(const char *name, int isadmin,
 EXPORTED int mboxlist_deletemailbox(const char *name, int isadmin,
 			   const char *userid,
 			   struct auth_state *auth_state,
-			   struct event_state *event_state, int checkacl,
+			   struct mboxevent *mboxevent, int checkacl,
 			   int local_only, int force)
 {
     struct mboxlist_entry *mbentry = NULL;
@@ -1079,12 +1079,12 @@ EXPORTED int mboxlist_deletemailbox(const char *name, int isadmin,
     if (!isremote && mailbox) {
 	/* only on a real delete do we delete from the remote end as well */
 	sync_log_unmailbox(mailbox->name);
-	mboxevent_extract_mailbox(event_state, mailbox);
+	mboxevent_extract_mailbox(mboxevent, mailbox);
 	r = mailbox_delete(&mailbox);
 
 	/* abort event notification */
-	if (r && event_state)
-	    mboxevent_free(&event_state);
+	if (r && mboxevent)
+	    mboxevent_free(&mboxevent);
 
     }
 
@@ -1104,7 +1104,7 @@ EXPORTED int mboxlist_renamemailbox(const char *oldname, const char *newname,
 			   const char *partition, unsigned uidvalidity,
 			   int isadmin, const char *userid,
 			   struct auth_state *auth_state,
-			   struct event_state *event_state,
+			   struct mboxevent *mboxevent,
 			   int forceuser, int ignorequota)
 {
     int r;
@@ -1312,13 +1312,13 @@ EXPORTED int mboxlist_renamemailbox(const char *oldname, const char *newname,
     } else {
 	if (newmailbox) {
 	    /* prepare the event notification */
-	    if (event_state) {
+	    if (mboxevent) {
 		/* case of delayed delete */
-		if (event_state->type == MailboxDelete)
-		    mboxevent_extract_mailbox(event_state, oldmailbox);
+		if (mboxevent->type == EVENT_MAILBOX_DELETE)
+		    mboxevent_extract_mailbox(mboxevent, oldmailbox);
 		else {
-		    mboxevent_extract_mailbox(event_state, newmailbox);
-		    event_state->oldmailboxid = mboxevent_toURL(oldmailbox);
+		    mboxevent_extract_mailbox(mboxevent, newmailbox);
+		    mboxevent->oldmailboxid = mboxevent_toURL(oldmailbox);
 		}
 	    }
 
@@ -2522,8 +2522,8 @@ EXPORTED int mboxlist_setquotas(const char *root,
     int r;
     int res;
     struct txn *tid = NULL;
-    struct event_state *quotachange_state = NULL;
-    struct event_state *quotawithin_state = NULL;
+    struct mboxevent *quotachange_state = NULL;
+    struct mboxevent *quotawithin_state = NULL;
 
     if (!root[0] || root[0] == '.' || strchr(root, '/')
 	|| strchr(root, '*') || strchr(root, '%') || strchr(root, '?')) {
@@ -2544,8 +2544,8 @@ EXPORTED int mboxlist_setquotas(const char *root,
 
 		/* prepare a QuotaChange event notification */
 		if (!quotachange_state)
-		    quotachange_state = event_newstate(QuotaChange,
-		                                       &quotachange_state);
+		    quotachange_state = mboxevent_enqueue(EVENT_QUOTA_CHANGE,
+		                                          &quotachange_state);
 
 		/* prepare a QuotaWithin event notification if now under quota */
 		if (q.limits[res] >= 0 &&
@@ -2553,8 +2553,8 @@ EXPORTED int mboxlist_setquotas(const char *root,
 			(q.useds[res] < ((quota_t)newquotas[res] * quota_units[res])
 				|| newquotas[res] == -1)) {
 		    if (!quotawithin_state)
-			quotawithin_state = event_newstate(QuotaWithin,
-			                                   &quotachange_state);
+			quotawithin_state = mboxevent_enqueue(EVENT_QUOTA_WITHIN,
+			                                      &quotachange_state);
 		    underquota++;
 		}
 
@@ -2622,7 +2622,7 @@ EXPORTED int mboxlist_setquotas(const char *root,
     if (r) goto done;
 
     /* prepare a QuotaChange event notification */
-    quotachange_state = event_newstate(QuotaChange, &quotachange_state);
+    quotachange_state = mboxevent_enqueue(EVENT_QUOTA_CHANGE, &quotachange_state);
     for (res = 0 ; res < QUOTA_NUMRESOURCES ; res++) {
     	if (q.limits[res] != QUOTA_UNLIMITED)
     	    mboxevent_extract_quota(quotachange_state, &q, res);
@@ -3363,7 +3363,7 @@ EXPORTED int mboxlist_checksub(const char *name, const char *userid)
  */
 EXPORTED int mboxlist_changesub(const char *name, const char *userid, 
 		       struct auth_state *auth_state,
-		       struct event_state *event_state, int add, int force)
+		       struct mboxevent *mboxevent, int add, int force)
 {
     struct mboxlist_entry *mbentry = NULL;
     int r;
@@ -3405,11 +3405,11 @@ EXPORTED int mboxlist_changesub(const char *name, const char *userid,
     }
 
     /* prepare a MailboxSubscribe or MailboxUnSubscribe event notification */
-    if (event_state) {
-	mboxevent_extract_access(event_state, NULL, NULL, userid);
-	event_state->mailboxid = xzmalloc(sizeof(struct imapurl));
-	event_state->mailboxid->server = config_servername;
-	event_state->mailboxid->mailbox = strdup(name);
+    if (mboxevent) {
+	mboxevent_set_access(mboxevent, NULL, NULL, userid);
+	mboxevent->mailboxid = xzmalloc(sizeof(struct imapurl));
+	mboxevent->mailboxid->server = config_servername;
+	mboxevent->mailboxid->mailbox = strdup(name);
     }
 
     sync_log_subscribe(userid, name);

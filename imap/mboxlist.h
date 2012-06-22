@@ -123,12 +123,12 @@ int mboxlist_createmailboxcheck(const char *name, int mbtype,
 /* localonly creates the local mailbox without touching mupdate */
 /* forceuser allows the creation of user.x.<name> without a user.x */
 /* dbonly skips filesystem operations (e.g. reconstruct) */
-/* prepare MailboxCreate notification if event_state is not NULL */
+/* prepare MailboxCreate notification if mboxevent is not NULL */
 int mboxlist_createmailbox(const char *name, int mbtype,
 			   const char *partition,
 			   int isadmin, const char *userid, 
 			   struct auth_state *auth_state,
-			   struct event_state *event_state,
+			   struct mboxevent *mboxevent,
 			   int localonly, int forceuser, int dbonly,
 			   struct dlist *extargs);
 
@@ -141,11 +141,11 @@ int mboxlist_createsync(const char *name, int mbtype,
 
 /* delated delete */
 /* Translate delete into rename */
-/* prepare MailboxDelete notification if event_state is not NULL */
+/* prepare MailboxDelete notification if mboxevent is not NULL */
 int
 mboxlist_delayed_deletemailbox(const char *name, int isadmin, const char *userid, 
                                struct auth_state *auth_state,
-                               struct event_state *event_state, int checkacl,
+                               struct mboxevent *mboxevent, int checkacl,
                                int force);
 /* Delete a mailbox. */
 /* setting local_only disables any communication with the mupdate server
@@ -153,19 +153,19 @@ mboxlist_delayed_deletemailbox(const char *name, int isadmin, const char *userid
  * MBTYPE_REMOTE or not */
 /* force ignores errors and just tries to wipe the mailbox off the face of
  * the planet */
-/* prepare MailboxDelete notification if event_state is not NULL */
+/* prepare MailboxDelete notification if mboxevent is not NULL */
 int mboxlist_deletemailbox(const char *name, int isadmin, const char *userid, 
 			   struct auth_state *auth_state,
-			   struct event_state *event_state, int checkacl,
+			   struct mboxevent *mboxevent, int checkacl,
 			   int local_only, int force);
 
 /* Rename/move a mailbox (hierarchical) */
-/* prepare MailboxRename notification if event_state is not NULL */
+/* prepare MailboxRename notification if mboxevent is not NULL */
 int mboxlist_renamemailbox(const char *oldname, const char *newname,
 			   const char *partition, unsigned uidvalidity,
 			   int isadmin, const char *userid,
 			   struct auth_state *auth_state,
-			   struct event_state *event_state,
+			   struct mboxevent *mboxevent,
 			   int forceuser, int ignorequota);
 
 /* change ACL */
@@ -213,7 +213,7 @@ int mboxlist_checksub(const char *name, const char *userid);
 /* Change 'user's subscription status for mailbox 'name'. */
 int mboxlist_changesub(const char *name, const char *userid, 
 		       struct auth_state *auth_state,
-		       struct event_state *event_state, int add, int force);
+		       struct mboxevent *mboxevent, int add, int force);
 
 /* set or create quota root */
 int mboxlist_setquotas(const char *root,

@@ -56,31 +56,31 @@
 /*
  * event types defined in RFC 5423 - Internet Message Store Events
  */
-enum  {
-    CancelledEvent      = (0),
+enum event_type {
+    EVENT_CANCELLED           = (0),
     /* Message Addition and Deletion */
-    MessageAppend       = (1<<0),
-    MessageExpire       = (1<<1),
-    MessageExpunge      = (1<<2),
-    MessageNew          = (1<<3),
-    vnd_cmu_MessageCopy = (1<<4), /* additional event type to notify IMAP COPY */
-    QuotaExceed         = (1<<5),
-    QuotaWithin         = (1<<6),
-    QuotaChange         = (1<<7),
+    EVENT_MESSAGE_APPEND      = (1<<0),
+    EVENT_MESSAGE_EXPIRE      = (1<<1),
+    EVENT_MESSAGE_EXPUNGE     = (1<<2),
+    EVENT_MESSAGE_NEW         = (1<<3),
+    EVENT_MESSAGE_COPY        = (1<<4), /* additional event type to notify IMAP COPY */
+    EVENT_QUOTA_EXCEED        = (1<<5),
+    EVENT_QUOTA_WITHIN        = (1<<6),
+    EVENT_QUOTA_CHANGE        = (1<<7),
     /* Message Flags */
-    MessageRead         = (1<<8),
-    MessageTrash        = (1<<9),
-    FlagsSet            = (1<<10),
-    FlagsClear          = (1<<11),
+    EVENT_MESSAGE_READ        = (1<<8),
+    EVENT_MESSAGE_TRASH       = (1<<9),
+    EVENT_FLAGS_SET           = (1<<10),
+    EVENT_FLAGS_CLEAR         = (1<<11),
     /* Access Accounting */
-    Login               = (1<<12),
-    Logout              = (1<<13),
+    EVENT_LOGIN               = (1<<12),
+    EVENT_LOGOUT              = (1<<13),
     /* Mailbox Management */
-    MailboxCreate       = (1<<14),
-    MailboxDelete       = (1<<15),
-    MailboxRename       = (1<<16),
-    MailboxSubscribe    = (1<<17),
-    MailboxUnSubscribe  = (1<<18)
+    EVENT_MAILBOX_CREATE      = (1<<14),
+    EVENT_MAILBOX_DELETE      = (1<<15),
+    EVENT_MAILBOX_RENAME      = (1<<16),
+    EVENT_MAILBOX_SUBSCRIBE   = (1<<17),
+    EVENT_MAILBOX_UNSUBSCRIBE = (1<<18)
 };
 
 #define MAX_PARAM 21 /* messageContent number that is always the last */
@@ -103,13 +103,13 @@ union event_param_value {
 };
 
 struct event_parameter {
-    char *name;
+    const char *name;
     const enum event_param_type t;
     union event_param_value value;
     int filled;
 };
 
-struct event_state {
+struct mboxevent {
     int type;	/* event type */
 
     /* array of event parameters */
@@ -120,11 +120,11 @@ struct event_state {
 
     strarray_t flagnames;
     struct timeval timestamp;
-    struct buf uidset;
+    struct seqset *uidset;
     struct buf midset;
-    struct buf olduidset;
+    struct seqset *olduidset;
 
-    struct event_state *next;
+    struct mboxevent *next;
 };
 
 
@@ -134,22 +134,32 @@ struct event_state {
 void mboxevent_init(void);
 
 /*
- * Create a new event state structure for the given event type.
+ * Create a new mboxevent structure for the given event type.
  * Allocate resources for configured extra parameters.
  *
  * return the initialized event state or NULL if notification is disabled
  */
-struct event_state *event_newstate(int type, struct event_state **event);
+struct mboxevent *mboxevent_new(enum event_type type);
 
 /*
- * Send a notification for this event
+ * Create a new mboxevent structure for the given event type.
+ * Append this new structure at end of the given mboxevent list.
+ * Allocate resources for configured extra parameters.
+ *
+ * return the initialized event state or NULL if notification is disabled
  */
-void mboxevent_notify(struct event_state *event);
+struct mboxevent *mboxevent_enqueue(enum event_type type,
+                                    struct mboxevent **events);
+
+/*
+ * Send the queue of event notifications
+ */
+void mboxevent_notify(struct mboxevent *mboxevents);
 
 /*
  * Release any allocated resources
  */
-void mboxevent_free(struct event_state **event);
+void mboxevent_free(struct mboxevent **event);
 
 /*
  * Add this set of system flags to flagNames parameter.
@@ -157,7 +167,7 @@ void mboxevent_free(struct event_state **event);
  *
  * Return the total number of flags added until now
  */
-int mboxevent_add_sysflags(struct event_state *event, bit32 sysflags);
+int mboxevent_add_system_flags(struct mboxevent *event, bit32 system_flags);
 
 /*
  * Add this set of user flags to flagNames parameter.
@@ -165,21 +175,21 @@ int mboxevent_add_sysflags(struct event_state *event, bit32 sysflags);
  *
  * Return the total number of flags added until now
  */
-int mboxevent_add_usrflags(struct event_state *event, const struct mailbox *mailbox,
-			   bit32 *usrflags);
+int mboxevent_add_user_flags(struct mboxevent *event,
+                             const struct mailbox *mailbox, bit32 *user_flags);
 
 /*
  * Add the given flag to flagNames parameter.
  * event_exclude_flags doesn't apply here
  */
-void mboxevent_add_flag(struct event_state *event, const char *flag);
+void mboxevent_add_flag(struct mboxevent *event, const char *flag);
 
 /*
  * Extract data related to message store access accounting
  */
-void mboxevent_extract_access(struct event_state *event,
-                              const char *serveraddr, const char *clientaddr,
-                              const char *userid);
+void mboxevent_set_access(struct mboxevent *event,
+                          const char *serveraddr, const char *clientaddr,
+                          const char *userid);
 /*
  * Extract data from the given record to fill these event parameters :
  * - uidset from UID
@@ -189,26 +199,27 @@ void mboxevent_extract_access(struct event_state *event,
  *
  * Called once per message and always before mboxevent_extract_mailbox
  */
-void mboxevent_extract_record(struct event_state *event, struct mailbox *mailbox,
+void mboxevent_extract_record(struct mboxevent *event,
+                              struct mailbox *mailbox,
                               struct index_record *record);
 
 /*
  * Fill event parameter about the copied message.
  * Called once per message and always before mboxevent_extract_mailbox
  */
-void mboxevent_extract_copied_record(struct event_state *event,
+void mboxevent_extract_copied_record(struct mboxevent *event,
 				     const struct mailbox *mailbox, uint32_t uid);
 
 /*
  * Extract message content to include with event notification
  */
-void mboxevent_extract_content(struct event_state *event,
+void mboxevent_extract_content(struct mboxevent *event,
                                const struct index_record *record, FILE* content);
 
 /*
  * Extract quota limit and quota usage to include with event notification
  */
-void mboxevent_extract_quota(struct event_state *event, const struct quota *quota,
+void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
                              enum quota_resource res);
 
 /*
@@ -225,7 +236,7 @@ void mboxevent_extract_quota(struct event_state *event, const struct quota *quot
  * It is necessary to call this function after all changes on mailbox to get the
  * right values of messages, uidnext and vnd.cmu.newMessages event parameters
  */
-void mboxevent_extract_mailbox(struct event_state *event, struct mailbox *mailbox);
+void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox);
 
 /*
  * Return an IMAP URL that identify the given mailbox on the server

@@ -503,7 +503,7 @@ int service_main(int argc __attribute__((unused)),
 {
     const char *localip, *remoteip;
     sasl_security_properties_t *secprops=NULL;
-    struct event_state *event_state = NULL;
+    struct mboxevent *mboxevent = NULL;
 
     if (config_iolog) {
         io_count_start = malloc (sizeof (struct io_count));
@@ -587,12 +587,12 @@ int service_main(int argc __attribute__((unused)),
     /* QUIT executed */
 
     /* send a Logout event notification */
-    if (event_newstate(Logout, &event_state)) {
-	mboxevent_extract_access(event_state, saslprops.iplocalport,
-	                         NULL, popd_userid);
+    if ((mboxevent = mboxevent_new(EVENT_LOGOUT))) {
+	mboxevent_set_access(mboxevent, saslprops.iplocalport,
+	                     NULL, popd_userid);
 
-	mboxevent_notify(event_state);
-	mboxevent_free(&event_state);
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
     }
 
     /* don't bother reusing KPOP connections */
@@ -834,9 +834,9 @@ static int expunge_deleted(void)
     uint32_t msgno;
     int r = 0;
     int numexpunged = 0;
-    struct event_state *event_state = NULL;
+    struct mboxevent *mboxevent;
 
-    event_newstate(MessageExpunge, &event_state);
+    mboxevent = mboxevent_new(EVENT_MESSAGE_EXPUNGE);
 
     /* loop over all known messages looking for deletes */
     for (msgno = 1; msgno <= popd_exists; msgno++) {
@@ -860,7 +860,7 @@ static int expunge_deleted(void)
 	r = mailbox_rewrite_index_record(popd_mailbox, &record);
 	if (r) break;
 
-	mboxevent_extract_record(event_state, popd_mailbox, &record);
+	mboxevent_extract_record(mboxevent, popd_mailbox, &record);
     }
 
     if (r) {
@@ -874,9 +874,9 @@ static int expunge_deleted(void)
     }
 
     /* send the MessageExpunge event notification */
-    mboxevent_extract_mailbox(event_state, popd_mailbox);
-    mboxevent_notify(event_state);
-    mboxevent_free(&event_state);
+    mboxevent_extract_mailbox(mboxevent, popd_mailbox);
+    mboxevent_notify(mboxevent);
+    mboxevent_free(&mboxevent);
 
     return r;
 }
@@ -1754,15 +1754,15 @@ int openinbox(void)
     struct mboxlist_entry *mbentry = NULL;
     struct statusdata sdata;
     struct proc_limits limits;
-    struct event_state *event_state = NULL;
+    struct mboxevent *mboxevent;
 
     /* send a Login event notification */
-    if (event_newstate(Login, &event_state)) {
-	mboxevent_extract_access(event_state, saslprops.iplocalport,
-	                         saslprops.ipremoteport, popd_userid);
+    if ((mboxevent = mboxevent_new(EVENT_LOGIN))) {
+	mboxevent_set_access(mboxevent, saslprops.iplocalport,
+	                     saslprops.ipremoteport, popd_userid);
 
-	mboxevent_notify(event_state);
-	mboxevent_free(&event_state);
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
     }
 
     if (popd_subfolder) {

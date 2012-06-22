@@ -862,7 +862,7 @@ int service_main(int argc __attribute__((unused)),
 {
     sasl_security_properties_t *secprops = NULL;
     const char *localip, *remoteip;
-    struct event_state *event_state = NULL;
+    struct mboxevent *mboxevent = NULL;
 
     struct io_count *io_count_start;
     struct io_count *io_count_stop;
@@ -934,12 +934,12 @@ int service_main(int argc __attribute__((unused)),
     snmp_increment(ACTIVE_CONNECTIONS, -1);
 
     /* send a Logout event notification */
-    if (event_newstate(Logout, &event_state)) {
-	mboxevent_extract_access(event_state, saslprops.iplocalport,
-	                         NULL, imapd_userid);
+    if ((mboxevent = mboxevent_new(EVENT_LOGOUT))) {
+	mboxevent_set_access(mboxevent, saslprops.iplocalport,
+	                     NULL, imapd_userid);
 
-	mboxevent_notify(event_state);
-	mboxevent_free(&event_state);
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
     }
 
     /* cleanup */
@@ -2222,7 +2222,7 @@ static void autocreate_inbox(void)
 static void authentication_success(void)
 {
     int r;
-    struct event_state *event_state = NULL;
+    struct mboxevent *mboxevent;
 
     /* register the user */
     proc_register("imapd", imapd_clienthost, imapd_userid, NULL);
@@ -2250,12 +2250,12 @@ static void authentication_success(void)
 				strcspn(imapd_userid, "@") : 0);
 
     /* send a Login event notification */
-    if (event_newstate(Login, &event_state)) {
-	mboxevent_extract_access(event_state, saslprops.iplocalport,
-	                         saslprops.ipremoteport, imapd_userid);
+    if ((mboxevent = mboxevent_new(EVENT_LOGIN))) {
+	mboxevent_set_access(mboxevent, saslprops.iplocalport,
+	                     saslprops.ipremoteport, imapd_userid);
 
-	mboxevent_notify(event_state);
-	mboxevent_free(&event_state);
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
     }
 
     autocreate_inbox();
@@ -3574,7 +3574,7 @@ static void cmd_append(char *tag, char *name, const char *cur_name)
 			 imapd_userid, imapd_authstate, ACL_INSERT,
 			 qdiffs, &imapd_namespace,
 			 (imapd_userisadmin || imapd_userisproxyadmin),
-			 MessageAppend);
+			 EVENT_MESSAGE_APPEND);
     }
     if (!r) {
 	struct body *body;
@@ -5445,15 +5445,15 @@ static void cmd_create(char *tag, char *name, struct dlist *extargs, int localon
 
     /* local mailbox */
     if (!r) {
-	struct event_state *event_state = NULL;
+	struct mboxevent *mboxevent;
 
-	event_newstate(MailboxCreate, &event_state);
+	mboxevent = mboxevent_new(EVENT_MAILBOX_CREATE);
 
 	/* xxx we do forced user creates on LOCALCREATE to facilitate
 	 * mailbox moves */
 	r = mboxlist_createmailbox(mailboxname, 0, partition,
 				   imapd_userisadmin || imapd_userisproxyadmin, 
-				   imapd_userid, imapd_authstate, event_state,
+				   imapd_userid, imapd_authstate, mboxevent,
 				   localonly, localonly, 0, extargs);
 
 	if (r == IMAP_PERMISSION_DENIED && !strcasecmp(name, "INBOX") &&
@@ -5462,7 +5462,7 @@ static void cmd_create(char *tag, char *name, struct dlist *extargs, int localon
 	    /* Auto create */
 	    r = mboxlist_createmailbox(mailboxname, 0, partition, 
 				       1, imapd_userid, imapd_authstate,
-				       event_state, 0, 0, 0, extargs);
+				       mboxevent, 0, 0, 0, extargs);
 	    
 	    int autocreatequotamessage = config_getint(IMAPOPT_AUTOCREATEQUOTAMSG);
 	    if (!r && ((autocreatequotastorage > 0) || (autocreatequotamessage > 0))) {
@@ -5480,8 +5480,8 @@ static void cmd_create(char *tag, char *name, struct dlist *extargs, int localon
 
 	/* send a MailboxCreate event notification */
 	if (!r)
-	    mboxevent_notify(event_state);
-	mboxevent_free(&event_state);
+	    mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
     }
 
     imapd_check(NULL, 0);
@@ -5540,7 +5540,7 @@ static void cmd_delete(char *tag, char *name, int localonly, int force)
     int r;
     char mailboxname[MAX_MAILBOX_BUFFER];
     struct mboxlist_entry *mbentry = NULL;
-    struct event_state *event_state = NULL;
+    struct mboxevent *mboxevent = NULL;
     char *p;
 
     r = (*imapd_namespace.mboxname_tointernal)(&imapd_namespace, name,
@@ -5595,33 +5595,33 @@ static void cmd_delete(char *tag, char *name, int localonly, int force)
     }
     mboxlist_entry_free(&mbentry);
 
-    event_newstate(MailboxDelete, &event_state);
+    mboxevent = mboxevent_new(EVENT_MAILBOX_DELETE);
 
     /* local mailbox */
     if (!r) {
         if (localonly || !mboxlist_delayed_delete_isenabled()) {
             r = mboxlist_deletemailbox(mailboxname,
 				       imapd_userisadmin || imapd_userisproxyadmin,
-                                       imapd_userid, imapd_authstate, event_state,
+                                       imapd_userid, imapd_authstate, mboxevent,
                                        1-force, localonly, 0);
         } else if ((imapd_userisadmin || imapd_userisproxyadmin) &&
                    mboxname_isdeletedmailbox(mailboxname, NULL)) {
             r = mboxlist_deletemailbox(mailboxname,
 				       imapd_userisadmin || imapd_userisproxyadmin,
-                                       imapd_userid, imapd_authstate, event_state,
+                                       imapd_userid, imapd_authstate, mboxevent,
                                        0 /* checkacl */, localonly, 0);
         } else {
             r = mboxlist_delayed_deletemailbox(mailboxname,
 					       imapd_userisadmin || imapd_userisproxyadmin,
-                                               imapd_userid, imapd_authstate, event_state,
+                                               imapd_userid, imapd_authstate, mboxevent,
                                                1-force, 0);
         }
     }
 
     /* send a MailboxDelete event notification */
     if (!r)
-	mboxevent_notify(event_state);
-    mboxevent_free(&event_state);
+	mboxevent_notify(mboxevent);
+    mboxevent_free(&mboxevent);
 
     /* was it a top-level user mailbox? */
     /* localonly deletes are only per-mailbox */
@@ -6006,15 +6006,15 @@ static void cmd_rename(char *tag, char *oldname, char *newname, char *partition)
 
     /* attempt to rename the base mailbox */
     if (!r) {
-	struct event_state *event_state = NULL;
+	struct mboxevent *mboxevent = NULL;
 
 	/* don't send rename notification if we only change the partition */
 	if (strcmp(oldmailboxname, newmailboxname))
-	   event_newstate(MailboxRename, &event_state);
+	    mboxevent = mboxevent_new(EVENT_MAILBOX_RENAME);
 
 	r = mboxlist_renamemailbox(oldmailboxname, newmailboxname, partition,
 				   0 /* uidvalidity */, imapd_userisadmin, 
-				   imapd_userid, imapd_authstate, event_state,
+				   imapd_userid, imapd_authstate, mboxevent,
 				   0, rename_user);
 	/* it's OK to not exist if there are subfolders */
 	if (r == IMAP_MAILBOX_NONEXISTENT && subcount && !rename_user &&
@@ -6024,8 +6024,8 @@ static void cmd_rename(char *tag, char *oldname, char *newname, char *partition)
 
 	/* send a MailboxRename event notification if enabled */
 	if (!r)
-	    mboxevent_notify(event_state);
-	mboxevent_free(&event_state);
+	    mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
     }
 
     /* If we're renaming a user, take care of changing quotaroot, ACL,
@@ -6481,17 +6481,17 @@ static void cmd_changesub(char *tag, char *namespace, char *name, int add)
 	    r = (*imapd_namespace.mboxname_tointernal)(&imapd_namespace, name,
 						       imapd_userid, mailboxname);
 	    if (!r) {
-		struct event_state *event_state = NULL;
+		struct mboxevent *mboxevent = NULL;
 
-		event_newstate(add ? MailboxSubscribe : MailboxUnSubscribe,
-			       &event_state);
+		mboxevent = mboxevent_new(add ? EVENT_MAILBOX_SUBSCRIBE :
+						EVENT_MAILBOX_UNSUBSCRIBE);
 		r = mboxlist_changesub(mailboxname, imapd_userid, 
-				       imapd_authstate, event_state, add, force);
+				       imapd_authstate, mboxevent, add, force);
 
 		/* send a MailboxSubscribe or MailboxUnSubscribe event notification */
 		if (!r)
-		    mboxevent_notify(event_state);
-		mboxevent_free(&event_state);
+		    mboxevent_notify(mboxevent);
+		mboxevent_free(&mboxevent);
 	    }
 	}
     }

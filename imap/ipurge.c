@@ -266,7 +266,7 @@ static int purge_me(char *name, int matchlen __attribute__((unused)),
     return r;
   }
 
-  mailbox_expunge(mailbox, purge_check, &stats, NULL, MessageExpunge);
+  mailbox_expunge(mailbox, purge_check, &stats, NULL, EVENT_MESSAGE_EXPUNGE);
 
   mailbox_close(&mailbox);
 
