@@ -1012,12 +1012,6 @@ out:
      * present in body structure ? */
     mboxevent_extract_record(mboxevent, mailbox, &record);
     mboxevent_extract_mailbox(mboxevent, mailbox);
-    /* quota usage could be different due to concurrent access on quota DB */
-    mboxevent_extract_quota(mboxevent,
-                            &((struct quota ) {NULL,
-					       {mailbox->i.quota_mailbox_used, 0, 0 },
-					       { 0, 0, 0 }, NULL, { 0, 0, 0 } }),
-			    QUOTA_STORAGE);
 
     return 0;
 }
@@ -1129,12 +1123,6 @@ out:
      * present in body structure */
     mboxevent_extract_record(mboxevent, mailbox, &record);
     mboxevent_extract_mailbox(mboxevent, mailbox);
-    /* quota usage could be different due to concurrent access on quota DB */
-    mboxevent_extract_quota(mboxevent,
-                            &((struct quota ) {NULL,
-					       {mailbox->i.quota_mailbox_used, 0, 0 },
-					       { 0, 0, 0 }, NULL, { 0, 0, 0 } }),
-			    QUOTA_STORAGE);
 
     return 0;
 }
@@ -1331,13 +1319,7 @@ EXPORTED int append_copy(struct mailbox *mailbox,
 
     if (mboxevent) {
 	mboxevent_extract_mailbox(mboxevent, as->mailbox);
-	/* quota usage could be different due to concurrent access on quota DB */
-	mboxevent_extract_quota(mboxevent,
-	                        &((struct quota ) {NULL,
-						   {as->mailbox->i.quota_mailbox_used, 0, 0 },
-						   { 0, 0, 0 }, NULL, { 0, 0, 0 } }),
-				QUOTA_STORAGE);
-	mboxevent->oldmailboxid = mboxevent_toURL(mailbox);
+	mailbox_to_url(mailbox, &mboxevent->oldmailboxid);
     }
 out:
     free(destfname);

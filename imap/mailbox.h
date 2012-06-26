@@ -52,6 +52,7 @@
 
 #include "auth.h"
 #include "byteorder64.h"
+#include "imapurl.h"
 #include "message_guid.h"
 #include "prot.h"
 #include "quota.h"
@@ -552,5 +553,7 @@ void mailbox_use_annot_quota(struct mailbox *mailbox, quota_t diff);
 extern int mailbox_get_annotate_state(struct mailbox *mailbox,
 				      unsigned int uid,
 				      struct annotate_state **statep);
+
+void mailbox_to_url(const struct mailbox *mailbox, struct imapurl **urlptr);
 
 #endif /* INCLUDED_MAILBOX_H */

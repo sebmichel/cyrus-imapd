@@ -1318,7 +1318,7 @@ EXPORTED int mboxlist_renamemailbox(const char *oldname, const char *newname,
 		    mboxevent_extract_mailbox(mboxevent, oldmailbox);
 		else {
 		    mboxevent_extract_mailbox(mboxevent, newmailbox);
-		    mboxevent->oldmailboxid = mboxevent_toURL(oldmailbox);
+		    mailbox_to_url(oldmailbox, &mboxevent->oldmailboxid);
 		}
 	    }
 

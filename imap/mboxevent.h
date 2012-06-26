@@ -121,7 +121,7 @@ struct mboxevent {
     strarray_t flagnames;
     struct timeval timestamp;
     struct seqset *uidset;
-    struct buf midset;
+    strarray_t midset;
     struct seqset *olduidset;
 
     struct mboxevent *next;
@@ -211,13 +211,14 @@ void mboxevent_extract_copied_record(struct mboxevent *event,
 				     const struct mailbox *mailbox, uint32_t uid);
 
 /*
- * Extract message content to include with event notification
+ * Extract message content to include to event notification
  */
 void mboxevent_extract_content(struct mboxevent *event,
                                const struct index_record *record, FILE* content);
 
 /*
- * Extract quota limit and quota usage to include with event notification
+ * Extract quota limit, quota usage and quota root to include to event
+ * notification
  */
 void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
                              enum quota_resource res);
@@ -237,10 +238,5 @@ void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
  * right values of messages, uidnext and vnd.cmu.newMessages event parameters
  */
 void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox);
-
-/*
- * Return an IMAP URL that identify the given mailbox on the server
- */
-struct imapurl *mboxevent_toURL(const struct mailbox *mailbox);
 
 #endif /* _MBOXEVENT_H */

@@ -146,7 +146,7 @@ static struct mboxevent event_template =
     { "messageContent", EVENT_PARAM_DYNSTRING, EVTVAL(char *, NULL), 0 }
   },
   NULL, NULL, STRARRAY_INITIALIZER, { 0, 0 },
-  NULL, BUF_INITIALIZER, NULL, NULL
+  NULL, STRARRAY_INITIALIZER, NULL, NULL
 };
 
 #if 0
@@ -295,7 +295,7 @@ void mboxevent_free(struct mboxevent **mboxevent)
     do {
 	seqset_free(event->uidset);
 	seqset_free(event->olduidset);
-	buf_free(&event->midset);
+	strarray_fini(&event->midset);
 
 	if (event->mailboxid) {
 	    free((char *)event->mailboxid->mailbox);
@@ -333,11 +333,13 @@ static int mboxevent_expected_param(int event_type, enum event_param param)
 	return event_type & (EVENT_QUOTA_EXCEED|EVENT_QUOTA_WITHIN|\
 			     EVENT_QUOTA_CHANGE);
     case EVENT_DISK_USED:
-	return (event_type & (EVENT_QUOTA_EXCEED|EVENT_QUOTA_WITHIN));
-	        /* XXX try to include diskUsed parameter to events below */
-		/*|| ((extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_DISKUSED) &&
-		 (event_type & (EVENT_MESSAGE_APPEND|EVENT_MESSAGE_NEW|\
-				EVENT_MESSAGE_COPY|EVENT_MESSAGE_EXPUNGE)));*/
+	return (event_type & (EVENT_QUOTA_EXCEED|EVENT_QUOTA_WITHIN) ||
+		/* quota usage is not known on event MessageNew, MessageAppend,
+		 * MessageCopy and MessageExpunge.
+		 * Thus, some code refactoring is needed to support diskUsed
+		 * extra parameter */
+		((extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_DISKUSED) &&
+		 (event_type & (EVENT_QUOTA_CHANGE))));
     case EVENT_FLAG_NAMES:
 	return (event_type & (EVENT_FLAGS_SET|EVENT_FLAGS_CLEAR)) ||
 	       ((extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_FLAGNAMES) &&
@@ -460,7 +462,7 @@ void mboxevent_notify(struct mboxevent *mboxevents)
 
 	    memset(url, 0, sizeof(url));
 	    imapurl_toURL(url, event->mailboxid);
-	    FILL_PARAM(event, EVENT_MAILBOX_ID, char *, strdup(url));
+	    FILL_PARAM(event, EVENT_MAILBOX_ID, char *, xstrdup(url));
 	}
 
 	if (event->oldmailboxid) {
@@ -468,7 +470,7 @@ void mboxevent_notify(struct mboxevent *mboxevents)
 
 	    memset(url, 0, sizeof(url));
 	    imapurl_toURL(url, event->oldmailboxid);
-	    FILL_PARAM(event, EVENT_OLD_MAILBOX_ID, char *, strdup(url));
+	    FILL_PARAM(event, EVENT_OLD_MAILBOX_ID, char *, xstrdup(url));
 	}
 
 	if (mboxevent_expected_param(event->type, EVENT_SERVICE)) {
@@ -488,8 +490,8 @@ void mboxevent_notify(struct mboxevent *mboxevents)
 	if (mboxevent_expected_param(event->type, EVENT_HOST)) {
 	    FILL_PARAM(event, EVENT_HOST, char *, config_servername);
 	}
-	if (buf_len(&event->midset) > 0) {
-	    FILL_PARAM(event, EVENT_MIDSET, char *, buf_cstring(&event->midset));
+	if (strarray_size(&event->midset) > 0) {
+	    FILL_PARAM(event, EVENT_MIDSET, char *, strarray_join(&event->midset, " "));
 	}
 	if (event->olduidset) {
 	    FILL_PARAM(event, EVENT_OLD_UIDSET, char *, seqset_cstring(event->olduidset));
@@ -620,7 +622,7 @@ void mboxevent_set_access(struct mboxevent *event,
 void mboxevent_extract_record(struct mboxevent *event, struct mailbox *mailbox,
                               struct index_record *record)
 {
-    const char *msgid = NULL;
+    char *msgid = NULL;
 
     if (!event)
 	return;
@@ -649,11 +651,10 @@ void mboxevent_extract_record(struct mboxevent *event, struct mailbox *mailbox,
     /* add Message-Id to midset or NIL if doesn't exists */
     if (mboxevent_expected_param(event->type, (EVENT_MIDSET))) {
 	msgid = mailbox_cache_get_msgid(mailbox, record);
+	strarray_add(&event->midset, msgid ? msgid : "NIL");
 
-	if (buf_len(&event->midset) == 0)
-	    buf_printf(&event->midset, "%s", msgid ? msgid : "NIL");
-	else
-	    buf_printf(&event->midset, " %s", msgid ? msgid : "NIL");
+	if (msgid)
+	    free(msgid);
     }
 
     /* add message size */
@@ -664,8 +665,8 @@ void mboxevent_extract_record(struct mboxevent *event, struct mailbox *mailbox,
     /* add bodyStructure */
     if (mboxevent_expected_param(event->type, EVENT_BODYSTRUCTURE)) {
 	FILL_PARAM(event, EVENT_BODYSTRUCTURE, char *,
-	           strndup(cacheitem_base(record, CACHE_BODYSTRUCTURE),
-	                   cacheitem_size(record, CACHE_BODYSTRUCTURE)));
+	           xstrndup(cacheitem_base(record, CACHE_BODYSTRUCTURE),
+	                    cacheitem_size(record, CACHE_BODYSTRUCTURE)));
     }
 }
 
@@ -739,11 +740,12 @@ void mboxevent_extract_content(struct mboxevent *event,
     }
 
     map_refresh(fileno(content), 1, &base, &len, record->size, "new message", 0);
-    FILL_PARAM(event, EVENT_MESSAGE_CONTENT, char *, strndup(base+offset, size));
+    FILL_PARAM(event, EVENT_MESSAGE_CONTENT, char *, xstrndup(base+offset, size));
     map_free(&base, &len);
 }
 
-void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
+void mboxevent_extract_quota(struct mboxevent *event,
+                             const struct quota *quota,
                              enum quota_resource res)
 {
     if (!event)
@@ -755,7 +757,8 @@ void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
 	    FILL_PARAM(event, EVENT_DISK_QUOTA, long, quota->limits[res]);
 	}
 	if (mboxevent_expected_param(event->type, EVENT_DISK_USED)) {
-	    FILL_PARAM(event, EVENT_DISK_USED, quota_t, quota->useds[res]/1024);
+	    FILL_PARAM(event, EVENT_DISK_USED, quota_t,
+	               quota->useds[res] / quota_units[res]);
 	}
 	break;
     case QUOTA_MESSAGE:
@@ -777,7 +780,7 @@ void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
     if (!event->mailboxid && event->type & (EVENT_QUOTA_EXCEED|EVENT_QUOTA_WITHIN|EVENT_QUOTA_CHANGE)) {
 	event->mailboxid = xzmalloc(sizeof(struct imapurl));
 	event->mailboxid->server = config_servername;
-	event->mailboxid->mailbox = strdup(quota->root);
+	event->mailboxid->mailbox = xstrdup(quota->root);
     }
 }
 
@@ -799,7 +802,7 @@ void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox)
     }
 
     assert(event->mailboxid == NULL);
-    event->mailboxid = mboxevent_toURL(mailbox);
+    mailbox_to_url(mailbox, &event->mailboxid);
 
     if (mboxevent_expected_param(event->type, EVENT_UIDNEXT)) {
 	FILL_PARAM(event, EVENT_UIDNEXT, uint32_t, mailbox->i.last_uid+1);
@@ -809,21 +812,11 @@ void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox)
     }
     if (mboxevent_expected_param(event->type, EVENT_NEW_MESSAGES)) {
 	/* as event notification is focused on mailbox, we don't care about the
-    	 * authenticated user but the mailbox's owner.
-    	 * also the number of unseen messages is a non sense for public and
-    	 * shared folders */
+	 * authenticated user but the mailbox's owner.
+	 * also the number of unseen messages is a non sense for public and
+	 * shared folders */
 	FILL_PARAM(event, EVENT_NEW_MESSAGES, uint32_t, mailbox_count_unseen(mailbox));
     }
-}
-
-struct imapurl *mboxevent_toURL(const struct mailbox *mailbox)
-{
-    struct imapurl *url = xzmalloc(sizeof(struct imapurl));
-    url->server = config_servername;
-    url->mailbox = strdup(mailbox->name);
-    url->uidvalidity = mailbox->i.uidvalidity;
-
-    return url;
 }
 
 static const char *eventname(int type)
