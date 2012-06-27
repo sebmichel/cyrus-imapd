@@ -459,10 +459,7 @@ Blank lines and lines beginning with ``#'' are ignored.
 { "event_groups", "message mailbox", BITFIELD("message", "quota", "flags", "access", "mailbox") }
 /* Space-separated list of groups of related events to turn on notification */
 
-{ "event_notifspam", 1, SWITCH }
-/* Enable event notification for email rated as spam */
-
-{ "eventnotifier", NULL, STRING }
+{ "event_notifier", NULL, STRING }
 /* Notifyd(8) method to use for "EVENT" notifications which are based on
    the RFC 5423.  If not set, "EVENT" notifications are disabled. */
 
