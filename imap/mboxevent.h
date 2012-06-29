@@ -1,6 +1,6 @@
 /* mboxevent.h -- interface for message store event notifications
  *
- * Copyright (c) 1994-2011 Carnegie Mellon University.  All rights reserved.
+ * Copyright (c) 1994-2012 Carnegie Mellon University.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -48,7 +48,6 @@
 #include "hash.h"
 #include "imapurl.h"
 #include "strarray.h"
-#include "util.h"
 
 #include "mailbox.h"
 

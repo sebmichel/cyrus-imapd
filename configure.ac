@@ -1009,6 +1009,14 @@ if test "$with_zephyr" != "no"; then
 fi
 AM_CONDITIONAL([ZEPHYR], [test "$with_zephyr" != "no"])
 
+dnl check for json-c to format mailbox event notification
+LIB_JSON=
+AC_CHECK_LIB(json, json_object_new_object,
+	[AC_CHECK_LIB(json, json_object_new_int64, 
+		[LIBS="${LIBS} -ljson"
+    		 AC_DEFINE(HAVE_LIBJSON,[],[Do we have the json library?])],
+    		[AC_WARN([Needs at least release 0.10 of json-c])])])
+
 dnl
 dnl Set pidfile location
 dnl
