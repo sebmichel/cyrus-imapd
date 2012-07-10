@@ -589,7 +589,7 @@ int service_main(int argc __attribute__((unused)),
     /* send a Logout event notification */
     if ((mboxevent = mboxevent_new(EVENT_LOGOUT))) {
 	mboxevent_set_access(mboxevent, saslprops.iplocalport,
-	                     NULL, popd_userid);
+	                     NULL, popd_userid, NULL);
 
 	mboxevent_notify(mboxevent);
 	mboxevent_free(&mboxevent);
@@ -1759,7 +1759,7 @@ int openinbox(void)
     /* send a Login event notification */
     if ((mboxevent = mboxevent_new(EVENT_LOGIN))) {
 	mboxevent_set_access(mboxevent, saslprops.iplocalport,
-	                     saslprops.ipremoteport, popd_userid);
+	                     saslprops.ipremoteport, popd_userid, NULL);
 
 	mboxevent_notify(mboxevent);
 	mboxevent_free(&mboxevent);

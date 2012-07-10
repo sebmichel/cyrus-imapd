@@ -46,7 +46,6 @@
 #define _MBOXEVENT_H
 
 #include "hash.h"
-#include "imapurl.h"
 #include "strarray.h"
 
 #include "mailbox.h"
@@ -82,40 +81,58 @@ enum event_type {
     EVENT_MAILBOX_UNSUBSCRIBE = (1<<18)
 };
 
-#define MAX_PARAM 21 /* messageContent number that is always the last */
+#define MAX_PARAM 22 /* messageContent number that is always the last */
+
+/*
+ * event parameters defined in RFC 5423 - Internet Message Store Events
+ *
+ * ordered to optimize the parsing of the notification message
+ */
+enum event_param {
+    EVENT_HOST,
+    EVENT_TIMESTAMP,
+    EVENT_SERVICE,
+    EVENT_SERVER_ADDRESS, /* gather serverDomain and serverPort together */
+    EVENT_CLIENT_ADDRESS, /* gather clientIP and clientPort together */
+    EVENT_OLD_MAILBOX_ID,
+    EVENT_OLD_UIDSET,
+    EVENT_MAILBOX_ID,
+    EVENT_URI,
+    EVENT_MODSEQ,
+    EVENT_DISK_QUOTA,
+    EVENT_DISK_USED,
+    EVENT_MAX_MESSAGES,
+    EVENT_MESSAGES,
+    EVENT_NEW_MESSAGES,
+    EVENT_UIDNEXT,
+    EVENT_UIDSET,
+    EVENT_MIDSET,
+    EVENT_FLAG_NAMES,
+    EVENT_USER,
+    EVENT_MESSAGE_SIZE,
+    EVENT_BODYSTRUCTURE,
+    EVENT_MESSAGE_CONTENT
+};
 
 enum event_param_type {
     EVENT_PARAM_INT,
-    EVENT_PARAM_UINT,
-    EVENT_PARAM_MODSEQT,
-    EVENT_PARAM_QUOTAT,
     EVENT_PARAM_STRING,
-    EVENT_PARAM_DYNSTRING /* must be freed */
-};
-
-union event_param_value {
-    char *s;      /* string */
-    long i;       /* int */
-    uint32_t u; /* unsigned 32 bits */
-    modseq_t m; /* unsigned 64 bits */
-    quota_t q;
+    EVENT_PARAM_ARRAY
 };
 
 struct event_parameter {
+    enum event_param id;
     const char *name;
-    const enum event_param_type t;
-    union event_param_value value;
+    enum event_param_type type;
+    uint64_t value;
     int filled;
 };
 
 struct mboxevent {
-    int type;	/* event type */
+    enum event_type type;	/* event type */
 
     /* array of event parameters */
     struct event_parameter params[MAX_PARAM+1];
-
-    struct imapurl *mailboxid; 	/* XXX translate mailbox name to external ? */
-    struct imapurl *oldmailboxid;
 
     strarray_t flagnames;
     struct timeval timestamp;
@@ -188,7 +205,7 @@ void mboxevent_add_flag(struct mboxevent *event, const char *flag);
  */
 void mboxevent_set_access(struct mboxevent *event,
                           const char *serveraddr, const char *clientaddr,
-                          const char *userid);
+                          const char *userid, const char *mailboxname);
 /*
  * Extract data from the given record to fill these event parameters :
  * - uidset from UID
@@ -238,4 +255,9 @@ void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
  */
 void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox);
 
+/*
+ * Extract meta-data from the given mailbox to fill oldMailboxID event parameter
+ */
+void mboxevent_extract_old_mailbox(struct mboxevent *event,
+                                   const struct mailbox *mailbox);
 #endif /* _MBOXEVENT_H */

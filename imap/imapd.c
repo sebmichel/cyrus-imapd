@@ -936,7 +936,7 @@ int service_main(int argc __attribute__((unused)),
     /* send a Logout event notification */
     if ((mboxevent = mboxevent_new(EVENT_LOGOUT))) {
 	mboxevent_set_access(mboxevent, saslprops.iplocalport,
-	                     NULL, imapd_userid);
+	                     NULL, imapd_userid, NULL);
 
 	mboxevent_notify(mboxevent);
 	mboxevent_free(&mboxevent);
@@ -2252,7 +2252,7 @@ static void authentication_success(void)
     /* send a Login event notification */
     if ((mboxevent = mboxevent_new(EVENT_LOGIN))) {
 	mboxevent_set_access(mboxevent, saslprops.iplocalport,
-	                     saslprops.ipremoteport, imapd_userid);
+	                     saslprops.ipremoteport, imapd_userid, NULL);
 
 	mboxevent_notify(mboxevent);
 	mboxevent_free(&mboxevent);

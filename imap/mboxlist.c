@@ -1318,7 +1318,7 @@ EXPORTED int mboxlist_renamemailbox(const char *oldname, const char *newname,
 		    mboxevent_extract_mailbox(mboxevent, oldmailbox);
 		else {
 		    mboxevent_extract_mailbox(mboxevent, newmailbox);
-		    mailbox_to_url(oldmailbox, &mboxevent->oldmailboxid);
+		    mboxevent_extract_old_mailbox(mboxevent, oldmailbox);
 		}
 	    }
 
@@ -3405,12 +3405,7 @@ EXPORTED int mboxlist_changesub(const char *name, const char *userid,
     }
 
     /* prepare a MailboxSubscribe or MailboxUnSubscribe event notification */
-    if (mboxevent) {
-	mboxevent_set_access(mboxevent, NULL, NULL, userid);
-	mboxevent->mailboxid = xzmalloc(sizeof(struct imapurl));
-	mboxevent->mailboxid->server = config_servername;
-	mboxevent->mailboxid->mailbox = strdup(name);
-    }
+    mboxevent_set_access(mboxevent, NULL, NULL, userid, name);
 
     sync_log_subscribe(userid, name);
     mboxlist_closesubs(subs);

@@ -4432,15 +4432,3 @@ EXPORTED int mailbox_get_annotate_state(struct mailbox *mailbox,
 
     return 0;
 }
-
-void mailbox_to_url(const struct mailbox *mailbox, struct imapurl **urlptr)
-{
-    struct imapurl *url = xzmalloc(sizeof(struct imapurl));
-
-    url->server = config_servername;
-    url->mailbox = xstrdup(mailbox->name);
-    url->uidvalidity = mailbox->i.uidvalidity;
-
-    *urlptr = url;
-    return;
-}

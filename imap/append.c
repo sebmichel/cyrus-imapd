@@ -1315,12 +1315,9 @@ EXPORTED int append_copy(struct mailbox *mailbox,
 
 	mboxevent_extract_record(mboxevent, as->mailbox, &record);
 	mboxevent_extract_copied_record(mboxevent, mailbox, copymsg[msg].uid);
+	mboxevent_extract_mailbox(mboxevent, as->mailbox);
     }
 
-    if (mboxevent) {
-	mboxevent_extract_mailbox(mboxevent, as->mailbox);
-	mailbox_to_url(mailbox, &mboxevent->oldmailboxid);
-    }
 out:
     free(destfname);
     if (r) append_abort(as);
