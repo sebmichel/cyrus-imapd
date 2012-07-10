@@ -42,8 +42,10 @@
 
 #include "xjson.h"
 
-#define ADD_SEP(json) if (buf_cstring(json)[buf_len(json) - 1] != '{') \
-	buf_putc(json, ',')
+#define ADD_SEP(json) if (json->first) \
+			json->first = 0; \
+		      else \
+			buf_putc(&json->buf, ',')
 
 static char *json_escape_str(const char *str)
 {
@@ -87,43 +89,67 @@ static char *json_escape_str(const char *str)
     return buf_release(&buffer);
 }
 
-void xjson_start(struct buf *json)
+void xjson_start(struct xjson *json)
 {
-    buf_printf(json, "{");
+    buf_printf(&json->buf, "{");
+    json->first = 1;
 }
 
-void xjson_end(struct buf *json)
+void xjson_end(struct xjson *json)
 {
-    buf_printf(json, "}");
+    buf_printf(&json->buf, "}");
 }
 
-void xjson_add_str(struct buf *json, const char *key, const char *val)
+void xjson_start_array(struct xjson *json, const char *key)
 {
     ADD_SEP(json);
-    buf_printf(json, "\"%s\":\"%s\"", key, json_escape_str(val));
+    buf_printf(&json->buf, "\"%s\":[", key);
+    json->first = 1;
 }
 
-void xjson_add_str_len(struct buf *json, const char *key,
+void xjson_end_array(struct xjson *json)
+{
+    buf_printf(&json->buf, "]");
+}
+
+void xjson_array_add_str(struct xjson *json, const char *val)
+{
+    ADD_SEP(json);
+    buf_printf(&json->buf, "\"%s\"", json_escape_str(val));
+}
+
+void xjson_add_str(struct xjson *json, const char *key, const char *val)
+{
+    ADD_SEP(json);
+    buf_printf(&json->buf, "\"%s\":\"%s\"", key, json_escape_str(val));
+}
+
+void xjson_add_str_len(struct xjson *json, const char *key,
                        const char *val, size_t len)
 {
     ADD_SEP(json);
-    buf_printf(json, "\"%s\":\"%.*s\"", key, (int)len, json_escape_str(val));
+    buf_printf(&json->buf, "\"%s\":\"%.*s\"", key, (int)len, json_escape_str(val));
 }
 
-void xjson_add_int(struct buf *json, const char *key, bit64 val)
+void xjson_add_int(struct xjson *json, const char *key, bit64 val)
 {
     ADD_SEP(json);
-    buf_printf(json, "\"%s\":%lld", key, val);
+    buf_printf(&json->buf, "\"%s\":%lld", key, val);
 }
 
-void xjson_add_uint(struct buf *json, const char *key, bit64 val)
+void xjson_add_uint(struct xjson *json, const char *key, bit64 val)
 {
     ADD_SEP(json);
-    buf_printf(json, "\"%s\":%llu", key, val);
+    buf_printf(&json->buf, "\"%s\":%llu", key, val);
 }
 
-void xjson_add_strint(struct buf *json, const char *key, const char *val)
+void xjson_add_strint(struct xjson *json, const char *key, const char *val)
 {
     ADD_SEP(json);
-    buf_printf(json, "\"%s\":%s", key, val);
+    buf_printf(&json->buf, "\"%s\":%s", key, val);
+}
+
+char *xjson_cstring(struct xjson *json)
+{
+    return buf_release(&json->buf);
 }

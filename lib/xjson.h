@@ -46,14 +46,27 @@
 
 #include "util.h"
 
-void xjson_start(struct buf *json);
-void xjson_end(struct buf *json);
+#define XJSON_INITIALIZER { BUF_INITIALIZER, 0 }
 
-void xjson_add_str(struct buf *json, const char *key, const char *val);
-void xjson_add_str_len(struct buf *json, const char *key,
+struct xjson {
+    struct buf buf;
+    int first;
+};
+
+void xjson_start(struct xjson *json);
+void xjson_end(struct xjson *json);
+
+void xjson_start_array(struct xjson *json, const char *key);
+void xjson_end_array(struct xjson *json);
+void xjson_array_add_str(struct xjson *json, const char *val);
+
+void xjson_add_str(struct xjson *json, const char *key, const char *val);
+void xjson_add_str_len(struct xjson *json, const char *key,
                        const char *val, size_t len);
-void xjson_add_int(struct buf *json, const char *key, bit64 val);
-void xjson_add_uint(struct buf *json, const char *key, bit64 val);
-void xjson_add_strint(struct buf *json, const char *ken, const char *val);
+void xjson_add_int(struct xjson *json, const char *key, bit64 val);
+void xjson_add_uint(struct xjson *json, const char *key, bit64 val);
+void xjson_add_strint(struct xjson *json, const char *ken, const char *val);
+
+char *xjson_cstring(struct xjson *json);
 
 #endif
