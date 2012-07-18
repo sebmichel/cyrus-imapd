@@ -178,21 +178,11 @@ void mboxevent_notify(struct mboxevent *mboxevents);
 void mboxevent_free(struct mboxevent **event);
 
 /*
- * Add this set of system flags to flagNames parameter.
- * Exclude system flags present in event_exclude_flags setting.
- *
- * Return the total number of flags added until now
+ * Add this set of system flags and user flags to flagNames parameter.
+ * Exclude flags present in event_exclude_flags setting.
  */
-int mboxevent_add_system_flags(struct mboxevent *event, bit32 system_flags);
-
-/*
- * Add this set of user flags to flagNames parameter.
- * Exclude user flags present in event_exclude_flags setting.
- *
- * Return the total number of flags added until now
- */
-int mboxevent_add_user_flags(struct mboxevent *event,
-                             const struct mailbox *mailbox, bit32 *user_flags);
+void mboxevent_add_flags(struct mboxevent *event, char *flagnames[MAX_USER_FLAGS],
+                         bit32 system_flags, bit32 user_flags[MAX_USER_FLAGS/32]);
 
 /*
  * Add the given flag to flagNames parameter.
@@ -239,6 +229,12 @@ void mboxevent_extract_content(struct mboxevent *event,
 void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
                              enum quota_resource res);
 
+/*
+ * Set the given number of unseen message if positive or scan the entire mailbox
+ * to count it.
+ */
+void mboxevent_set_numunseen(struct mboxevent *event, struct mailbox *mailbox,
+                             int numunseen);
 /*
  * Extract meta-data from the given mailbox to fill mailboxID event parameter and
  * optionally these ones depending the type of the event:

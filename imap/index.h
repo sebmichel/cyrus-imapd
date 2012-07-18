@@ -122,7 +122,6 @@ struct index_state {
     struct protstream *out;
     int qresync;
     struct auth_state *authstate;
-    struct mboxevent *mboxevent;
 };
 
 struct copyargs {

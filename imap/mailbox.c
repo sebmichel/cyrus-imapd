@@ -2791,7 +2791,10 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	    record.system_flags |= FLAG_EXPUNGED;
 
 	    r = mailbox_rewrite_index_record(mailbox, &record);
-	    if (r) return IMAP_IOERROR;
+	    if (r) {
+		mboxevent_free(&mboxevent);
+		return IMAP_IOERROR;
+	    }
 
 	    mboxevent_extract_record(mboxevent, mailbox, &record);
 	}
@@ -2801,8 +2804,9 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	syslog(LOG_NOTICE, "Expunged %d messages from %s",
 	       numexpunged, mailbox->name);
 
-	/* send or abort the MessageExpunge or MessageExpire event notification */
+	/* send the MessageExpunge or MessageExpire event notification */
 	mboxevent_extract_mailbox(mboxevent, mailbox);
+	mboxevent_set_numunseen(mboxevent, mailbox, -1);
 	mboxevent_notify(mboxevent);
     }
 

@@ -6019,9 +6019,10 @@ static void cmd_rename(char *tag, char *oldname, char *newname, char *partition)
 	/* it's OK to not exist if there are subfolders */
 	if (r == IMAP_MAILBOX_NONEXISTENT && subcount && !rename_user &&
 	   mboxname_userownsmailbox(imapd_userid, oldmailboxname) &&
-	   mboxname_userownsmailbox(imapd_userid, newmailboxname))
+	   mboxname_userownsmailbox(imapd_userid, newmailboxname)) {
+	    mboxevent_free(&mboxevent);
 	    goto submboxes;
-
+	}
 	/* send a MailboxRename event notification if enabled */
 	if (!r)
 	    mboxevent_notify(mboxevent);

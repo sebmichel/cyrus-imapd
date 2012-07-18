@@ -160,12 +160,12 @@ void mboxevent_init(void)
 
     /* some don't want to notify events for some IMAP flags */
     options = config_getstring(IMAPOPT_EVENT_EXCLUDE_FLAGS);
-    excluded_flags = strarray_split(options, NULL);
+    excluded_flags = strarray_split(options, NULL, 0);
 
     /* some don't want to notify events on some folders (ie. Sent, Spam) */
     /* identify those folders with IMAP SPECIAL-USE */
     options = config_getstring(IMAPOPT_EVENT_EXCLUDE_SPECIALUSE);
-    excluded_specialuse = strarray_split(options, NULL);
+    excluded_specialuse = strarray_split(options, NULL, 0);
 
     /* special meaning to disable event notification on all sub folders */
     if (strarray_find_case(excluded_specialuse, "ALL", 0) >= 0)
@@ -206,7 +206,7 @@ static int mboxevent_enabled_for_mailbox(struct mailbox *mailbox)
 	const char *attribute;
 
 	/* get info and set flags */
-	specialuse = strarray_split(mailbox->specialuse, NULL);
+	specialuse = strarray_split(mailbox->specialuse, NULL, 0);
 
 	for (i = 0; i < strarray_size(specialuse) ; i++) {
 	    attribute = strarray_nth(specialuse, i);
@@ -516,8 +516,12 @@ void mboxevent_notify(struct mboxevent *mboxevents)
     return;
 }
 
-int mboxevent_add_system_flags(struct mboxevent *event, bit32 system_flags)
+void mboxevent_add_flags(struct mboxevent *event, char *flagnames[MAX_USER_FLAGS],
+                         bit32 system_flags, bit32 user_flags[MAX_USER_FLAGS/32])
 {
+    unsigned flag, flagmask;
+
+    /* add system flags */
     if (system_flags & FLAG_DELETED) {
 	if (strarray_find_case(excluded_flags, "\\Deleted", 0) < 0)
 	    strarray_add_case(&event->flagnames, "\\Deleted");
@@ -539,26 +543,17 @@ int mboxevent_add_system_flags(struct mboxevent *event, bit32 system_flags)
 	    strarray_add_case(&event->flagnames, "\\Seen");
     }
 
-    return strarray_size(&event->flagnames);
-}
-
-
-int mboxevent_add_user_flags(struct mboxevent *event,
-                             const struct mailbox *mailbox, bit32 *user_flags)
-{
-    int flag;
-
+    /* add user flags */
     for (flag = 0; flag < MAX_USER_FLAGS; flag++) {
-	if (!mailbox->flagname[flag])
-	    continue;
-	if (!(user_flags[flag/32] & (1<<(flag&31))))
-	    continue;
+    	if ((flag & 31) == 0) {
+    	    flagmask = user_flags[flag/32];
+    	}
+    	if (!(flagnames[flag] && (flagmask & (1<<(flag & 31)))))
+    	    continue;
 
-	if (strarray_find_case(excluded_flags, mailbox->flagname[flag], 0) < 0)
-	    strarray_add_case(&event->flagnames, mailbox->flagname[flag]);
+	if (strarray_find_case(excluded_flags, flagnames[flag], 0) < 0)
+	    strarray_add_case(&event->flagnames, flagnames[flag]);
     }
-
-    return strarray_size(&event->flagnames);
 }
 
 void mboxevent_add_flag(struct mboxevent *event, const char *flag)
@@ -792,6 +787,21 @@ void mboxevent_extract_quota(struct mboxevent *event,
     }
 }
 
+void mboxevent_set_numunseen(struct mboxevent *event, struct mailbox *mailbox,
+                             int numunseen)
+{
+    if (!event)
+    	return;
+
+    if (mboxevent_expected_param(event->type, EVENT_NEW_MESSAGES)) {
+	/* as event notification is focused on mailbox, we don't care about the
+	 * authenticated user but the mailbox's owner.
+	 * it could be a problem only if it is a shared or public folder */
+	FILL_INT_PARAM(event, EVENT_NEW_MESSAGES, numunseen >= 0 ? numunseen :
+		       mailbox_count_unseen(mailbox));
+    }
+}
+
 void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox)
 {
     struct imapurl imapurl;
@@ -847,12 +857,6 @@ void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox)
      */
     if (mboxevent_expected_param(event->type, EVENT_MESSAGES)) {
 	FILL_INT_PARAM(event, EVENT_MESSAGES, mailbox->i.exists);
-    }
-    if (mboxevent_expected_param(event->type, EVENT_NEW_MESSAGES)) {
-	/* as event notification is focused on mailbox, we don't care about the
-	 * authenticated user but the mailbox's owner.
-	 * it could be a problem only if it is a shared or public folder */
-	FILL_INT_PARAM(event, EVENT_NEW_MESSAGES, mailbox_count_unseen(mailbox));
     }
 }
 
@@ -1120,12 +1124,18 @@ static int filled_params(enum event_type type, struct mboxevent *event)
 	if (mboxevent_expected_param(type, param) &&
 		!event->params[param].filled) {
 	    switch (event->params[param].id) {
+	    case EVENT_DISK_QUOTA:
+		return event->params[EVENT_MAX_MESSAGES].filled;
+	    case EVENT_DISK_USED:
+		return event->params[EVENT_MESSAGES].filled;
 	    case EVENT_FLAG_NAMES:
 		/* flagNames may be included with MessageAppend and MessageNew
 		 * also we don't expect it here. */
 		if (!(type & (EVENT_MESSAGE_APPEND|EVENT_MESSAGE_NEW)))
 		    buf_appendcstr(&missing, " flagNames");
 		break;
+	    case EVENT_MAX_MESSAGES:
+		return event->params[EVENT_DISK_QUOTA].filled;
 	    case EVENT_MESSAGE_CONTENT:
 		/* messageContent is not included in standard mode if the size
 		 * of the message exceed the limit */
@@ -1133,6 +1143,8 @@ static int filled_params(enum event_type type, struct mboxevent *event)
 		    IMAP_ENUM_EVENT_CONTENT_INCLUSION_MODE_STANDARD)
 		    buf_appendcstr(&missing, " messageContent");
 		break;
+	    case EVENT_MESSAGES:
+		return event->params[EVENT_DISK_USED].filled;
 	    case EVENT_MODSEQ:
 		/* modseq is not included if notification refers to several
 		 * messages */

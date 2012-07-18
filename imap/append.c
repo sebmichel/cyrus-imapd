@@ -781,34 +781,38 @@ static int append_apply_flags(struct appendstate *as,
 	const char *flag = strarray_nth(flags, i);
 	if (!strcasecmp(flag, "\\seen")) {
 	    append_setseen(as, record);
+	    mboxevent_add_flag(mboxevent, flag);
 	}
 	else if (!strcasecmp(flag, "\\deleted")) {
 	    if (as->myrights & ACL_DELETEMSG) {
 		record->system_flags |= FLAG_DELETED;
+		mboxevent_add_flag(mboxevent, flag);
 	    }
 	}
 	else if (!strcasecmp(flag, "\\draft")) {
 	    if (as->myrights & ACL_WRITE) {
 		record->system_flags |= FLAG_DRAFT;
+		mboxevent_add_flag(mboxevent, flag);
 	    }
 	}
 	else if (!strcasecmp(flag, "\\flagged")) {
 	    if (as->myrights & ACL_WRITE) {
 		record->system_flags |= FLAG_FLAGGED;
+		mboxevent_add_flag(mboxevent, flag);
 	    }
 	}
 	else if (!strcasecmp(flag, "\\answered")) {
 	    if (as->myrights & ACL_WRITE) {
 		record->system_flags |= FLAG_ANSWERED;
+		mboxevent_add_flag(mboxevent, flag);
 	    }
 	}
 	else if (as->myrights & ACL_WRITE) {
 	    r = mailbox_user_flag(as->mailbox, flag, &userflag, 1);
 	    if (r) goto out;
 	    record->user_flags[userflag/32] |= 1<<(userflag&31);
+	    mboxevent_add_flag(mboxevent, flag);
 	}
-
-	mboxevent_add_flag(mboxevent, flag);
     }
 
 out:
@@ -1012,6 +1016,7 @@ out:
      * present in body structure ? */
     mboxevent_extract_record(mboxevent, mailbox, &record);
     mboxevent_extract_mailbox(mboxevent, mailbox);
+    mboxevent_set_numunseen(mboxevent, mailbox, -1);
 
     return 0;
 }
@@ -1123,6 +1128,7 @@ out:
      * present in body structure */
     mboxevent_extract_record(mboxevent, mailbox, &record);
     mboxevent_extract_mailbox(mboxevent, mailbox);
+    mboxevent_set_numunseen(mboxevent, mailbox, -1);
 
     return 0;
 }
@@ -1316,6 +1322,7 @@ EXPORTED int append_copy(struct mailbox *mailbox,
 	mboxevent_extract_record(mboxevent, as->mailbox, &record);
 	mboxevent_extract_copied_record(mboxevent, mailbox, copymsg[msg].uid);
 	mboxevent_extract_mailbox(mboxevent, as->mailbox);
+	mboxevent_set_numunseen(mboxevent, as->mailbox, -1);
     }
 
 out:
