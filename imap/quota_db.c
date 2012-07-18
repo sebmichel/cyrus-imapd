@@ -294,6 +294,10 @@ EXPORTED int quota_check(const struct quota *q,
 	struct mboxevent *mboxevent;
 
 	/* send a QuotaExceed event notification */
+	/* note: IMAP MULTIAPPEND is not taken into account by the RFC 5423.
+	 * so there is a strange behavior to send QuotaExceed notification with
+	 * value of messages/diskUsed less than value of maxMessages/DiskQuota.
+	 */
 	mboxevent = mboxevent_new(EVENT_QUOTA_EXCEED);
 	mboxevent_extract_quota(mboxevent, q, res);
 
@@ -480,7 +484,7 @@ EXPORTED int quota_update_useds(const char *quotaroot,
 		q.scanuseds[res] += diff[res];
 
 	    if (oldused >= (q.limits[res] * quota_units[res]) &&
-		q.useds[res] < (q.limits[res] * quota_units[res])) {
+		!quota_is_overquota(&q, res, NULL)) {
 		if (!mboxevent)
 		    mboxevent = mboxevent_new(EVENT_QUOTA_WITHIN);
 		mboxevent_extract_quota(mboxevent, &q, res);
@@ -789,4 +793,12 @@ EXPORTED void quotadb_close(void)
 EXPORTED void quotadb_done(void)
 {
     /* DB->done() handled by cyrus_done() */
+}
+
+int quota_is_overquota(const struct quota *quota, enum quota_resource res,
+                       int newquotas[QUOTA_NUMRESOURCES])
+{
+    int limit = newquotas ? newquotas[res] : quota->limits[res];
+
+    return limit >= 0 && quota->useds[res] >= ((quota_t)limit * quota_units[res]);
 }
