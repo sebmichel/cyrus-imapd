@@ -574,8 +574,8 @@ void mboxevent_add_flag(struct mboxevent *event, const char *flag)
 }
 
 EXPORTED void mboxevent_set_access(struct mboxevent *event,
-                          const char *serveraddr, const char *clientaddr,
-                          const char *userid, const char *mailboxname)
+                                   const char *serveraddr, const char *clientaddr,
+                                   const char *userid, const char *mailboxname)
 {
     char url[MAX_MAILBOX_PATH+1];
     struct imapurl imapurl;
@@ -626,7 +626,7 @@ EXPORTED void mboxevent_set_access(struct mboxevent *event,
 }
 
 EXPORTED void mboxevent_extract_record(struct mboxevent *event, struct mailbox *mailbox,
-                              struct index_record *record)
+                                       struct index_record *record)
 {
     char *msgid = NULL;
 
@@ -761,8 +761,7 @@ void mboxevent_extract_content(struct mboxevent *event,
     map_free(&base, &len);
 }
 
-void mboxevent_extract_quota(struct mboxevent *event,
-                             const struct quota *quota,
+void mboxevent_extract_quota(struct mboxevent *event, const struct quota *quota,
                              enum quota_resource res)
 {
     struct imapurl imapurl;
@@ -814,8 +813,8 @@ void mboxevent_extract_quota(struct mboxevent *event,
     }
 }
 
-void mboxevent_set_numunseen(struct mboxevent *event, struct mailbox *mailbox,
-                             int numunseen)
+EXPORTED void mboxevent_set_numunseen(struct mboxevent *event,
+                                      struct mailbox *mailbox, int numunseen)
 {
     if (!event)
     	return;
@@ -829,7 +828,8 @@ void mboxevent_set_numunseen(struct mboxevent *event, struct mailbox *mailbox,
     }
 }
 
-void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox)
+EXPORTED void mboxevent_extract_mailbox(struct mboxevent *event,
+                                        struct mailbox *mailbox)
 {
     struct imapurl imapurl;
     char url[MAX_MAILBOX_PATH+1];
@@ -969,7 +969,8 @@ static const char *event_to_name(enum event_type type)
 }
 
 #ifdef HAVE_LIBJSON
-static struct json_object *json_formatter(enum event_type type, struct event_parameter params[])
+static struct json_object *json_formatter(enum event_type type,
+                                          struct event_parameter params[])
 {
     int param, ival;
     const char *val, *ptr;
