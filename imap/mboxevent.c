@@ -95,6 +95,7 @@
 			      }
 
 static const char *notifier = NULL;
+static struct namespace namespace;
 
 static strarray_t *excluded_flags;
 static strarray_t *excluded_specialuse;
@@ -190,6 +191,13 @@ EXPORTED void mboxevent_init(void)
 
     if (groups & IMAP_ENUM_EVENT_GROUPS_MAILBOX)
 	enabled_events |= MAILBOX_EVENTS;
+}
+
+EXPORTED void mboxevent_setnamespace(struct namespace *n)
+{
+    namespace = *n;
+    /* standardize IMAP URL format */
+    namespace.isadmin = 0;
 }
 
 static int mboxevent_enabled_for_mailbox(struct mailbox *mailbox)
@@ -571,6 +579,7 @@ EXPORTED void mboxevent_set_access(struct mboxevent *event,
 {
     char url[MAX_MAILBOX_PATH+1];
     struct imapurl imapurl;
+    char extname[MAX_MAILBOX_NAME];
 
     if (!event)
 	return;
@@ -585,7 +594,17 @@ EXPORTED void mboxevent_set_access(struct mboxevent *event,
     if (!event->params[EVENT_URI].filled) {
 	memset(&imapurl, 0, sizeof(struct imapurl));
 	imapurl.server = config_servername;
-	imapurl.mailbox = mailboxname;
+
+	if (mailboxname != NULL) {
+	    /* translate internal mailbox name to external */
+	    assert(namespace.mboxname_toexternal != NULL);
+	    (*namespace.mboxname_toexternal)(&namespace, mailboxname,
+					     mboxname_to_userid(mailboxname),
+					     extname);
+
+	    imapurl.mailbox = extname;
+	    imapurl.user = mboxname_to_userid(mailboxname);
+	}
 
 	imapurl_toURL(url, &imapurl);
 	FILL_STRING_PARAM(event, EVENT_URI, xstrdup(url));
@@ -748,6 +767,7 @@ void mboxevent_extract_quota(struct mboxevent *event,
 {
     struct imapurl imapurl;
     char url[MAX_MAILBOX_PATH+1];
+    char extname[MAX_MAILBOX_NAME];
 
     if (!event)
 	return;
@@ -779,9 +799,16 @@ void mboxevent_extract_quota(struct mboxevent *event,
      * quota root specified in RFC 2087. Thus we fill uri with quota root
      */
     if (!event->params[EVENT_URI].filled && event->type & QUOTA_EVENTS) {
+	/* translate internal mailbox name to external */
+	assert(namespace.mboxname_toexternal != NULL);
+	(*namespace.mboxname_toexternal)(&namespace, quota->root,
+					 mboxname_to_userid(quota->root),
+					 extname);
+
 	memset(&imapurl, 0, sizeof(struct imapurl));
 	imapurl.server = config_servername;
-	imapurl.mailbox = xstrdup(quota->root);
+	imapurl.mailbox = extname;
+	imapurl.user = mboxname_to_userid(quota->root);
 	imapurl_toURL(url, &imapurl);
 	FILL_STRING_PARAM(event, EVENT_URI, xstrdup(url));
     }
@@ -806,6 +833,7 @@ void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox)
 {
     struct imapurl imapurl;
     char url[MAX_MAILBOX_PATH+1];
+    char extname[MAX_MAILBOX_NAME];
 
     if (!event)
 	return;
@@ -820,10 +848,16 @@ void mboxevent_extract_mailbox(struct mboxevent *event, struct mailbox *mailbox)
 	return;
     }
 
+    /* translate internal mailbox name to external */
+    assert(namespace.mboxname_toexternal != NULL);
+    (*namespace.mboxname_toexternal)(&namespace, mailbox->name,
+				     mboxname_to_userid(mailbox->name), extname);
+
     /* all events needs uri parameter */
     memset(&imapurl, 0, sizeof(struct imapurl));
     imapurl.server = config_servername;
-    imapurl.mailbox = mailbox->name;
+    imapurl.mailbox = extname;
+    imapurl.user = mboxname_to_userid(mailbox->name);
     imapurl.uidvalidity = mailbox->i.uidvalidity;
     if (event->type & (EVENT_MESSAGE_NEW|EVENT_MESSAGE_APPEND)) {
 	imapurl.uid = seqset_first(event->uidset);
@@ -865,13 +899,20 @@ void mboxevent_extract_old_mailbox(struct mboxevent *event,
 {
     struct imapurl imapurl;
     char url[MAX_MAILBOX_PATH+1];
+    char extname[MAX_MAILBOX_NAME];
 
     if (!event)
 	return;
 
+    /* translate internal mailbox name to external */
+    assert(namespace.mboxname_toexternal != NULL);
+    (*namespace.mboxname_toexternal)(&namespace, mailbox->name,
+				     mboxname_to_userid(mailbox->name), extname);
+
     memset(&imapurl, 0, sizeof(struct imapurl));
     imapurl.server = config_servername;
-    imapurl.mailbox = mailbox->name;
+    imapurl.mailbox = extname;
+    imapurl.user = mboxname_to_userid(mailbox->name);
     imapurl.uidvalidity = mailbox->i.uidvalidity;
 
     imapurl_toURL(url, &imapurl);

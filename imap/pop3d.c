@@ -466,6 +466,7 @@ int service_init(int argc __attribute__((unused)),
 	syslog(LOG_ERR, "%s", error_message(r));
 	fatal(error_message(r), EC_CONFIG);
     }
+    mboxevent_setnamespace(&popd_namespace);
 
     while ((opt = getopt(argc, argv, "skp:")) != EOF) {
 	switch(opt) {

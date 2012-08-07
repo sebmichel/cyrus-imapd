@@ -173,11 +173,15 @@ int main (int argc, char *argv[]) {
 
   cyrus_init(alt_config, "ipurge", 0, CONFIG_NEED_PARTITION_DATA);
 
+  /* setup for mailbox event notifications */
+  mboxevent_init();
+
   /* Set namespace -- force standard (internal) */
   if ((r = mboxname_init_namespace(&purge_namespace, 1)) != 0) {
       syslog(LOG_ERR, "%s", error_message(r));
       fatal(error_message(r), EC_CONFIG);
   }
+  mboxevent_setnamespace(&purge_namespace);
 
   mboxlist_init(0);
   mboxlist_open(NULL);
@@ -187,9 +191,6 @@ int main (int argc, char *argv[]) {
   quotadb_open(NULL);
 
   sync_log_init();
-
-  /* setup for mailbox event notifications */
-  mboxevent_init();
 
   if (optind == argc) { /* do the whole partition */
     strcpy(buf, "*");

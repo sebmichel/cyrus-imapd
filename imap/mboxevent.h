@@ -49,6 +49,7 @@
 #include "strarray.h"
 
 #include "mailbox.h"
+#include "mboxname.h"
 
 
 /*
@@ -147,7 +148,12 @@ struct mboxevent {
 /*
  * Call this initializer once only at start
  */
-void mboxevent_init(void);
+void mboxevent_init();
+
+/*
+ * Set the namespace to translate internal mailbox name to external name
+ */
+void mboxevent_setnamespace(struct namespace *n);
 
 /*
  * Create a new mboxevent structure for the given event type.

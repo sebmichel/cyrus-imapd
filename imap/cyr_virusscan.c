@@ -287,6 +287,7 @@ int main (int argc, char *argv[]) {
 
     /* setup for mailbox event notifications */
     mboxevent_init();
+    mboxevent_setnamespace(&scan_namespace);
 
     if (optind == argc) { /* do the whole partition */
 	strcpy(buf, "*");

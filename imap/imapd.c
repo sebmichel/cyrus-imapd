@@ -2236,6 +2236,9 @@ static void authentication_success(void)
     /* Set namespace */
     r = mboxname_init_namespace(&imapd_namespace,
 				imapd_userisadmin || imapd_userisproxyadmin);
+
+    mboxevent_setnamespace(&imapd_namespace);
+
     if (r) {
 	syslog(LOG_ERR, "%s", error_message(r));
 	fatal(error_message(r), EC_CONFIG);
