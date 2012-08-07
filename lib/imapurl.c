@@ -457,7 +457,10 @@ EXPORTED void imapurl_toURL(char *dst, struct imapurl *url)
 
     if (url->server) {
 	dst += sprintf(dst, "imap://");
-	if (url->auth) dst += sprintf(dst, ";AUTH=%s@", url->auth);
+	if (url->user) dst += sprintf(dst, "%s", url->user);
+	if (url->auth) dst += sprintf(dst, ";AUTH=%s", url->auth);
+	if (url->user || url->auth)
+	    *dst++ = '@';
 	dst += sprintf(dst, "%s", url->server);
     }
     if (url->mailbox) {
