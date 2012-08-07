@@ -503,8 +503,8 @@ EXPORTED int time_to_iso8601_utc(time_t t, char *buf, size_t len)
  *
  * Returns: number of characters in @buf generated, or -1 on error.
  */
-int timeval_to_iso8601(const struct timeval *tv, enum timeval_precision tv_prec,
-                       char *buf, size_t len)
+EXPORTED int timeval_to_iso8601(const struct timeval *tv, enum timeval_precision tv_prec,
+				char *buf, size_t len)
 {
     struct tm *tm = localtime(&(tv->tv_sec));
     return breakdown_time_to_iso8601(tv, tm, tv_prec, buf, len);

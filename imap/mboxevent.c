@@ -150,7 +150,7 @@ static int filled_params(enum event_type type, struct mboxevent *mboxevent);
 static int mboxevent_expected_param(enum event_type type, enum event_param param);
 
 
-void mboxevent_init(void)
+EXPORTED void mboxevent_init(void)
 {
     const char *options;
     int groups;
@@ -218,7 +218,7 @@ static int mboxevent_enabled_for_mailbox(struct mailbox *mailbox)
     return 1;
 }
 
-struct mboxevent *mboxevent_new(enum event_type type)
+EXPORTED struct mboxevent *mboxevent_new(enum event_type type)
 {
     struct mboxevent *mboxevent;
 
@@ -269,7 +269,7 @@ struct mboxevent *mboxevent_enqueue(enum event_type type,
     return mboxevent;
 }
 
-void mboxevent_free(struct mboxevent **mboxevent)
+EXPORTED void mboxevent_free(struct mboxevent **mboxevent)
 {
     struct mboxevent *next, *event = *mboxevent;
     int i;
@@ -380,7 +380,7 @@ static int mboxevent_expected_param(enum event_type type, enum event_param param
 
 static const char *event_to_name(enum event_type type);
 #define TIMESTAMP_MAX 32
-void mboxevent_notify(struct mboxevent *mboxevents)
+EXPORTED void mboxevent_notify(struct mboxevent *mboxevents)
 {
     enum event_type type;
     struct mboxevent *event, *next;
@@ -565,7 +565,7 @@ void mboxevent_add_flag(struct mboxevent *event, const char *flag)
 	strarray_add_case(&event->flagnames, flag);
 }
 
-void mboxevent_set_access(struct mboxevent *event,
+EXPORTED void mboxevent_set_access(struct mboxevent *event,
                           const char *serveraddr, const char *clientaddr,
                           const char *userid, const char *mailboxname)
 {
@@ -606,7 +606,7 @@ void mboxevent_set_access(struct mboxevent *event,
     }
 }
 
-void mboxevent_extract_record(struct mboxevent *event, struct mailbox *mailbox,
+EXPORTED void mboxevent_extract_record(struct mboxevent *event, struct mailbox *mailbox,
                               struct index_record *record)
 {
     char *msgid = NULL;

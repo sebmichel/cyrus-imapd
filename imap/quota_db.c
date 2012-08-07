@@ -795,7 +795,7 @@ EXPORTED void quotadb_done(void)
     /* DB->done() handled by cyrus_done() */
 }
 
-int quota_is_overquota(const struct quota *quota, enum quota_resource res,
+EXPORTED int quota_is_overquota(const struct quota *quota, enum quota_resource res,
                        int newquotas[QUOTA_NUMRESOURCES])
 {
     int limit = newquotas ? newquotas[res] : quota->limits[res];
