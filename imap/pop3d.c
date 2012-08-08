@@ -78,6 +78,7 @@
 #include "imapd.h"
 #include "imap/imap_err.h"
 #include "mailbox.h"
+#include "mboxevent.h"
 #include "version.h"
 #include "xmalloc.h"
 #include "xstrlcpy.h"
@@ -456,12 +457,16 @@ int service_init(int argc __attribute__((unused)),
 
     /* setup for sending IMAP IDLE notifications */
     idle_init();
+    
+    /* setup for mailbox event notifications */
+    mboxevent_init();
 
     /* Set namespace */
     if ((r = mboxname_init_namespace(&popd_namespace, 1)) != 0) {
 	syslog(LOG_ERR, "%s", error_message(r));
 	fatal(error_message(r), EC_CONFIG);
     }
+    mboxevent_setnamespace(&popd_namespace);
 
     while ((opt = getopt(argc, argv, "skp:")) != EOF) {
 	switch(opt) {
@@ -499,6 +504,7 @@ int service_main(int argc __attribute__((unused)),
 {
     const char *localip, *remoteip;
     sasl_security_properties_t *secprops=NULL;
+    struct mboxevent *mboxevent = NULL;
 
     if (config_iolog) {
         io_count_start = malloc (sizeof (struct io_count));
@@ -580,6 +586,15 @@ int service_main(int argc __attribute__((unused)),
     cmdloop();
 
     /* QUIT executed */
+    
+    /* send a Logout event notification */
+    if ((mboxevent = mboxevent_new(EVENT_LOGOUT))) {
+	mboxevent_set_access(mboxevent, saslprops.iplocalport,
+			     NULL, popd_userid, NULL);
+
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
+    }
 
     /* don't bother reusing KPOP connections */
     if (kflag) shut_down(0);
@@ -1730,6 +1745,16 @@ int openinbox(void)
     struct mboxlist_entry *mbentry = NULL;
     struct statusdata sdata;
     struct proc_limits limits;
+    struct mboxevent *mboxevent;
+
+    /* send a Login event notification */
+    if ((mboxevent = mboxevent_new(EVENT_LOGIN))) {
+	mboxevent_set_access(mboxevent, saslprops.iplocalport,
+			     saslprops.ipremoteport, popd_userid, NULL);
+
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
+    }
 
     if (popd_subfolder) {
 	/* we need to convert to internal namespace dammit */

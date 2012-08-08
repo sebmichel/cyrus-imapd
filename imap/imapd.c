@@ -92,6 +92,7 @@
 #include "index.h"
 #include "mailbox.h"
 #include "message.h"
+#include "mboxevent.h"
 #include "mboxkey.h"
 #include "mboxlist.h"
 #include "mboxname.h"
@@ -802,6 +803,9 @@ int service_init(int argc, char **argv, char **envp)
     /* setup for sending IMAP IDLE notifications */
     idle_init();
 
+    /* setup for mailbox event notifications */
+    mboxevent_init();
+
     /* create connection to the SNMP listener, if available. */
     snmp_connect(); /* ignore return code */
     snmp_set_str(SERVER_NAME_VERSION,cyrus_version());
@@ -858,6 +862,7 @@ int service_main(int argc __attribute__((unused)),
 {
     sasl_security_properties_t *secprops = NULL;
     const char *localip, *remoteip;
+    struct mboxevent *mboxevent = NULL;
 
     struct io_count *io_count_start;
     struct io_count *io_count_stop;
@@ -927,6 +932,16 @@ int service_main(int argc __attribute__((unused)),
     /* LOGOUT executed */
     prot_flush(imapd_out);
     snmp_increment(ACTIVE_CONNECTIONS, -1);
+
+    /* send a Logout event notification */
+    if ((mboxevent = mboxevent_new(EVENT_LOGOUT))) {
+	mboxevent_set_access(mboxevent, saslprops.iplocalport,
+			     NULL, imapd_userid, NULL);
+
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
+    }
+
 
     /* cleanup */
     imapd_reset();
@@ -2208,6 +2223,7 @@ static void autocreate_inbox(void)
 static void authentication_success(void)
 {
     int r;
+    struct mboxevent *mboxevent;
 
     /* register the user */
     proc_register("imapd", imapd_clienthost, imapd_userid, NULL);
@@ -2221,6 +2237,9 @@ static void authentication_success(void)
     /* Set namespace */
     r = mboxname_init_namespace(&imapd_namespace,
 				imapd_userisadmin || imapd_userisproxyadmin);
+    
+    mboxevent_setnamespace(&imapd_namespace);
+    
     if (r) {
 	syslog(LOG_ERR, "%s", error_message(r));
 	fatal(error_message(r), EC_CONFIG);
@@ -2233,6 +2252,15 @@ static void authentication_success(void)
     mboxname_hiersep_tointernal(&imapd_namespace, imapd_userid,
 				config_virtdomains ?
 				strcspn(imapd_userid, "@") : 0);
+
+    /* send a Login event notification */
+    if ((mboxevent = mboxevent_new(EVENT_LOGIN))) {
+	mboxevent_set_access(mboxevent, saslprops.iplocalport,
+			     saslprops.ipremoteport, imapd_userid, NULL);
+
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
+    }
 
     autocreate_inbox();
 }
