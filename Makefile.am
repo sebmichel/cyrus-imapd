@@ -327,7 +327,8 @@ nobase_include_HEADERS = sieve/sieve_interface.h
 nobase_nodist_include_HEADERS = sieve/sieve_err.h
 
 noinst_HEADERS = lib/byteorder64.h lib/gai.h lib/libconfig.h lib/md5.h \
-	lib/prot.h lib/ptrarray.h lib/util.h lib/xstrlcat.h lib/xstrlcpy.h
+	lib/prot.h lib/ptrarray.h lib/util.h lib/xjson.h lib/xstrlcat.h \
+	lib/xstrlcpy.h
 
 imap_arbitron_SOURCES = imap/arbitron.c imap/cli_fatal.c imap/mutex_fake.c
 imap_arbitron_LDADD = $(LD_UTILITY_ADD)
@@ -567,8 +568,14 @@ else
 lib_libcyrus_min_la_SOURCES += lib/map_nommap.c
 endif
 endif
+if JANSSON
+imap_libcyrus_imap_la_LIBADD += $(JANSSON_LIBS)
+imap_libcyrus_imap_la_CFLAGS += $(JANSSON_CFLAGS)
+else
+lib_libcyrus_min_la_SOURCES += lib/xjson.c
+endif
 lib_libcyrus_min_la_SOURCES += lib/mpool.c lib/retry.c lib/strarray.c \
-	lib/strhash.c lib/util.c lib/xmalloc.c lib/xstrlcat.c lib/xstrlcpy.c \
+	lib/strhash.c lib/util.c lib/xmalloc.c lib/xstrlcat.c lib/xstrlcpy.c\
 	lib/hashu64.c
 lib_libcyrus_min_la_LIBADD = $(LTLIBOBJS)
 lib_libcyrus_min_la_CFLAGS = $(AM_CFLAGS) $(CFLAG_VISIBILITY)

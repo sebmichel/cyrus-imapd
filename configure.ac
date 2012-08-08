@@ -1010,6 +1010,18 @@ fi
 AM_CONDITIONAL([ZEPHYR], [test "$with_zephyr" != "no"])
 
 dnl
+dnl check for jansson library to format mailbox event notification
+dnl
+PKG_CHECK_MODULES([JANSSON], [jansson >= 2.0],
+	[check_jansson=true] 
+	  [AC_DEFINE(HAVE_JANSSON,[],[Build with jansson support?])]
+	  [AC_SUBST([JANSSON_LIBS])]
+	  [AC_SUBST([JANSSON_CFLAGS])],
+	[check_jansson=false]
+	  [AC_WARN([jansson 2.0 or later was not found, use internal one])])
+AM_CONDITIONAL(JANSSON, test x$check_jansson = xtrue)
+
+dnl
 dnl Set pidfile location
 dnl
 AC_ARG_WITH(pidfile,
