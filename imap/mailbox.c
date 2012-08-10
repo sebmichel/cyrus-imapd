@@ -92,6 +92,7 @@
 #include "mailbox.h"
 #include "message.h"
 #include "map.h"
+#include "mboxevent.h"
 #include "mboxlist.h"
 #include "retry.h"
 #include "seen.h"
@@ -2748,15 +2749,19 @@ static unsigned expungedeleted(struct mailbox *mailbox __attribute__((unused)),
  * function pointed to by 'decideproc' is called (with 'deciderock') to
  * determine which messages to expunge.  If 'decideproc' is a null pointer,
  * then messages with the \Deleted flag are expunged.
+ *
+ * 	event_type - the event among MessageExpunge, MessageExpire (zero means
+ * 		     don't send notification)
  */
 EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 		    mailbox_decideproc_t *decideproc, void *deciderock,
-		    unsigned *nexpunged)
+		    unsigned *nexpunged, int event_type)
 {
     int r = 0;
     int numexpunged = 0;
     uint32_t recno;
     struct index_record record;
+    struct mboxevent *mboxevent = NULL;
 
     assert(mailbox_index_islocked(mailbox, 1));
 
@@ -2765,6 +2770,9 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	if (nexpunged) *nexpunged = 0;
 	return 0;
     }
+
+    if (event_type)
+	mboxevent = mboxevent_new(event_type);
 
     if (!decideproc) decideproc = expungedeleted;
 
@@ -2783,14 +2791,26 @@ EXPORTED int mailbox_expunge(struct mailbox *mailbox,
 	    record.system_flags |= FLAG_EXPUNGED;
 
 	    r = mailbox_rewrite_index_record(mailbox, &record);
-	    if (r) return IMAP_IOERROR;
+	    if (r) {
+		mboxevent_free(&mboxevent);
+		return IMAP_IOERROR;
+	    }
+
+	    mboxevent_extract_record(mboxevent, mailbox, &record);
 	}
     }
 
     if (numexpunged > 0) {
 	syslog(LOG_NOTICE, "Expunged %d messages from %s",
 	       numexpunged, mailbox->name);
+
+	/* send the MessageExpunge or MessageExpire event notification */
+	mboxevent_extract_mailbox(mboxevent, mailbox);
+	mboxevent_set_numunseen(mboxevent, mailbox, -1);
+	mboxevent_notify(mboxevent);
     }
+
+    mboxevent_free(&mboxevent);
 
     if (nexpunged) *nexpunged = numexpunged;
 
@@ -3434,7 +3454,7 @@ EXPORTED int mailbox_rename_cleanup(struct mailbox **mailboxptr, int isinbox)
 
     if (isinbox) {
 	/* Expunge old mailbox */
-	r = mailbox_expunge(oldmailbox, expungeall, (char *)0, NULL);
+	r = mailbox_expunge(oldmailbox, expungeall, (char *)0, NULL, 0);
 	if (!r) r = mailbox_commit(oldmailbox);
 	mailbox_close(mailboxptr);
     } else {

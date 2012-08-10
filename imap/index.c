@@ -275,12 +275,15 @@ EXPORTED int index_expunge(struct index_state *state, char *sequence,
     struct index_map *im;
     struct seqset *seq = NULL;
     int numexpunged = 0;
+    struct mboxevent *mboxevent;
 
     r = index_lock(state);
     if (r) return r;
 
     /* XXX - earlier list if the sequence names UIDs that don't exist? */
     seq = _parse_sequence(state, sequence, 1);
+
+    mboxevent = mboxevent_new(EVENT_MESSAGE_EXPUNGE);
 
     for (msgno = 1; msgno <= state->exists; msgno++) {
 	im = &state->map[msgno-1];
@@ -308,9 +311,14 @@ EXPORTED int index_expunge(struct index_state *state, char *sequence,
 	r = mailbox_rewrite_index_record(state->mailbox, &im->record);
 
 	if (r) break;
+
+	mboxevent_extract_record(mboxevent, state->mailbox, &im->record);
     }
 
     seqset_free(seq);
+
+    mboxevent_extract_mailbox(mboxevent, state->mailbox);
+    mboxevent_set_numunseen(mboxevent, state->mailbox, state->numunseen);
 
     /* unlock before responding */
     index_unlock(state);
@@ -318,7 +326,14 @@ EXPORTED int index_expunge(struct index_state *state, char *sequence,
     if (!r && (numexpunged > 0)) {
 	syslog(LOG_NOTICE, "Expunged %d messages from %s",
 	       numexpunged, state->mailbox->name);
+
+	/* send the MessageExpunge event notification for "immediate", "default"
+	 * and "delayed" expunge */
+	mboxevent_notify(mboxevent);
     }
+
+    mboxevent_free(&mboxevent);
+
     return r;
 }
 

@@ -77,8 +77,8 @@
 #include "exitcodes.h"
 #include "imapd.h"
 #include "imap/imap_err.h"
-#include "mailbox.h"
 #include "mboxevent.h"
+#include "mailbox.h"
 #include "version.h"
 #include "xmalloc.h"
 #include "xstrlcpy.h"
@@ -457,7 +457,7 @@ int service_init(int argc __attribute__((unused)),
 
     /* setup for sending IMAP IDLE notifications */
     idle_init();
-    
+ 
     /* setup for mailbox event notifications */
     mboxevent_init();
 
@@ -586,7 +586,7 @@ int service_main(int argc __attribute__((unused)),
     cmdloop();
 
     /* QUIT executed */
-    
+
     /* send a Logout event notification */
     if ((mboxevent = mboxevent_new(EVENT_LOGOUT))) {
 	mboxevent_set_access(mboxevent, saslprops.iplocalport,
@@ -835,6 +835,9 @@ static int expunge_deleted(void)
     uint32_t msgno;
     int r = 0;
     int numexpunged = 0;
+    struct mboxevent *mboxevent;
+
+    mboxevent = mboxevent_new(EVENT_MESSAGE_EXPUNGE);
 
     /* loop over all known messages looking for deletes */
     for (msgno = 1; msgno <= popd_exists; msgno++) {
@@ -857,6 +860,8 @@ static int expunge_deleted(void)
 	/* store back to the mailbox */
 	r = mailbox_rewrite_index_record(popd_mailbox, &record);
 	if (r) break;
+
+	mboxevent_extract_record(mboxevent, popd_mailbox, &record);
     }
 
     if (r) {
@@ -868,6 +873,12 @@ static int expunge_deleted(void)
 	syslog(LOG_NOTICE, "Expunged %d messages from %s",
 	       numexpunged, popd_mailbox->name);
     }
+
+    /* send the MessageExpunge event notification */
+    mboxevent_extract_mailbox(mboxevent, popd_mailbox);
+    mboxevent_set_numunseen(mboxevent, popd_mailbox, -1);
+    mboxevent_notify(mboxevent);
+    mboxevent_free(&mboxevent);
 
     return r;
 }
