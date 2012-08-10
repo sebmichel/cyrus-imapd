@@ -61,6 +61,7 @@
 #include "imap/imap_err.h"
 #include "mailbox.h"
 #include "mboxname.h"
+#include "mboxevent.h"
 #include "quota.h"
 #include "util.h"
 #include "xmalloc.h"
@@ -289,8 +290,22 @@ EXPORTED int quota_check(const struct quota *q,
 	return 0;
 
     lim = (quota_t)q->limits[res] * quota_units[res];
-    if (q->useds[res] + delta > lim)
+    if (q->useds[res] + delta > lim) {
+	struct mboxevent *mboxevent;
+
+	/* send a QuotaExceed event notification */
+	/* note: IMAP MULTIAPPEND is not taken into account by the RFC 5423.
+	 * so there is a strange behavior to send QuotaExceed notification with
+	 * value of messages/diskUsed less than value of maxMessages/DiskQuota.
+	 */
+	mboxevent = mboxevent_new(EVENT_QUOTA_EXCEED);
+	mboxevent_extract_quota(mboxevent, q, res);
+
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
+
 	return IMAP_QUOTA_EXCEEDED;
+    }
     return 0;
 }
 
@@ -445,6 +460,7 @@ EXPORTED int quota_update_useds(const char *quotaroot,
     struct quota q;
     struct txn *tid = NULL;
     int r = 0;
+    struct mboxevent *mboxevent = NULL;
 
     if (!quotaroot || !*quotaroot)
 	return IMAP_QUOTAROOT_NONEXISTENT;
@@ -456,14 +472,23 @@ EXPORTED int quota_update_useds(const char *quotaroot,
     if (!r) {
 	int res;
 	int cmp = 1;
+	quota_t oldused;
 	if (q.scanmbox) {
 	    cmp = cyrusdb_compar(qdb, mboxname, strlen(mboxname),
 				 q.scanmbox, strlen(q.scanmbox));
 	}
 	for (res = 0; res < QUOTA_NUMRESOURCES; res++) {
+	    oldused = q.useds[res];
 	    quota_use(&q, res, diff[res]);
 	    if (cmp <= 0)
 		q.scanuseds[res] += diff[res];
+
+	    if (oldused >= (q.limits[res] * quota_units[res]) &&
+		!quota_is_overquota(&q, res, NULL)) {
+		if (!mboxevent)
+		    mboxevent = mboxevent_new(EVENT_QUOTA_WITHIN);
+		mboxevent_extract_quota(mboxevent, &q, res);
+	    }
 	}
 	r = quota_write(&q, &tid);
     }
@@ -473,6 +498,7 @@ EXPORTED int quota_update_useds(const char *quotaroot,
 	goto out;
     }
     quota_commit(&tid);
+    mboxevent_notify(mboxevent);
 
 out:
     quota_free(&q);
@@ -482,6 +508,7 @@ out:
 	       diff[QUOTA_STORAGE], diff[QUOTA_MESSAGE],
 	       quotaroot, error_message(r));
     }
+    mboxevent_free(&mboxevent);
 
     return r;
 }
