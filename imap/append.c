@@ -143,14 +143,15 @@ done:
  *		     (-1 means don't care about quota)
  *	quotamessage_check - mailbox must have this much message quota left
  *		     (-1 means don't care about quota)
- *
+ *	event_type - the event among MessageNew, MessageAppend and
+ *		     vnd.cmu.MessageCopy (zero means don't send notification)
  * On success, the struct pointed to by 'as' is set up.
  *
  */
 EXPORTED int append_setup(struct appendstate *as, const char *name,
 		 const char *userid, struct auth_state *auth_state,
 		 long aclcheck, const quota_t quotacheck[QUOTA_NUMRESOURCES],
-		 struct namespace *namespace, int isadmin)
+		 struct namespace *namespace, int isadmin, int event_type)
 {
     int r;
     struct mailbox *mailbox = NULL;
@@ -159,13 +160,13 @@ EXPORTED int append_setup(struct appendstate *as, const char *name,
     if (r) return r;
 
     return append_setup_mbox(as, mailbox, userid, auth_state,
-			     aclcheck, quotacheck, namespace, isadmin);
+			     aclcheck, quotacheck, namespace, isadmin, event_type);
 }
 
 HIDDEN int append_setup_mbox(struct appendstate *as, struct mailbox *mailbox,
 		 const char *userid, struct auth_state *auth_state,
 		 long aclcheck, const quota_t quotacheck[QUOTA_NUMRESOURCES],
-		 struct namespace *namespace, int isadmin)
+		 struct namespace *namespace, int isadmin, int event_type)
 {
     int r;
 
@@ -215,6 +216,9 @@ HIDDEN int append_setup_mbox(struct appendstate *as, struct mailbox *mailbox,
     as->baseuid = as->mailbox->i.last_uid + 1;
     as->s = APPEND_READY;
 
+    as->event_type = event_type;
+    as->mboxevents = NULL;
+
     return 0;
 }
 
@@ -251,6 +255,11 @@ EXPORTED int append_commit(struct appendstate *as,
 	return r;
     }
 
+    /* send the list of MessageCopy or MessageAppend event notifications at once */
+    mboxevent_notify(as->mboxevents);
+    mboxevent_freequeue(&as->mboxevents);
+    as->event_type = 0;
+
     if (mailboxptr) {
 	*mailboxptr = as->mailbox;
     }
@@ -277,6 +286,10 @@ EXPORTED int append_abort(struct appendstate *as)
     mailbox_close(&as->mailbox);
 
     seqset_free(as->seen_seq);
+
+    /* don't send the MessageCopy or MessageAppend event notifications */
+    mboxevent_freequeue(&as->mboxevents);
+    as->event_type = 0;
 
     return r;
 }
@@ -755,6 +768,7 @@ out:
 }
 
 static int append_apply_flags(struct appendstate *as,
+                              struct mboxevent *mboxevent,
 			      struct index_record *record,
 			      const strarray_t *flags)
 {
@@ -767,31 +781,37 @@ static int append_apply_flags(struct appendstate *as,
 	const char *flag = strarray_nth(flags, i);
 	if (!strcasecmp(flag, "\\seen")) {
 	    append_setseen(as, record);
+	    mboxevent_add_flag(mboxevent, flag);
 	}
 	else if (!strcasecmp(flag, "\\deleted")) {
 	    if (as->myrights & ACL_DELETEMSG) {
 		record->system_flags |= FLAG_DELETED;
+		mboxevent_add_flag(mboxevent, flag);
 	    }
 	}
 	else if (!strcasecmp(flag, "\\draft")) {
 	    if (as->myrights & ACL_WRITE) {
 		record->system_flags |= FLAG_DRAFT;
+		mboxevent_add_flag(mboxevent, flag);
 	    }
 	}
 	else if (!strcasecmp(flag, "\\flagged")) {
 	    if (as->myrights & ACL_WRITE) {
 		record->system_flags |= FLAG_FLAGGED;
+		mboxevent_add_flag(mboxevent, flag);
 	    }
 	}
 	else if (!strcasecmp(flag, "\\answered")) {
 	    if (as->myrights & ACL_WRITE) {
 		record->system_flags |= FLAG_ANSWERED;
+		mboxevent_add_flag(mboxevent, flag);
 	    }
 	}
 	else if (as->myrights & ACL_WRITE) {
 	    r = mailbox_user_flag(as->mailbox, flag, &userflag, 1);
 	    if (r) goto out;
 	    record->user_flags[userflag/32] |= 1<<(userflag&31);
+	    mboxevent_add_flag(mboxevent, flag);
 	}
     }
 
@@ -848,6 +868,7 @@ EXPORTED int append_fromstage(struct appendstate *as, struct body **body,
     int i, r;
     strarray_t *newflags = NULL;
     struct entryattlist *system_annots = NULL;
+    struct mboxevent *mboxevent = NULL;
 
     /* for staging */
     char stagefile[MAX_MAILBOX_PATH+1];
@@ -906,6 +927,12 @@ EXPORTED int append_fromstage(struct appendstate *as, struct body **body,
     record.uid = as->baseuid + as->nummsg;
     record.internaldate = internaldate;
 
+    /* prepare a new notification for this appended message
+     * the event type must be set with MessageNew or MessageAppend */
+    if (as->event_type) {
+	mboxevent = mboxevent_enqueue(as->event_type, &as->mboxevents);
+    }
+
     /* Create message file */
     as->nummsg++;
     fname = mailbox_message_fname(mailbox, record.uid);
@@ -917,6 +944,11 @@ EXPORTED int append_fromstage(struct appendstate *as, struct body **body,
 	if (!*body || (as->nummsg - 1))
 	    r = message_parse_file(destfile, NULL, NULL, body);
 	if (!r) r = message_create_record(&record, *body);
+
+	/* messageContent may be included with MessageAppend and MessageNew */
+	if (!r)
+	    mboxevent_extract_content(mboxevent, &record, destfile);
+
     }
     if (destfile) {
 	/* this will hopefully ensure that the link() actually happened
@@ -963,7 +995,7 @@ EXPORTED int append_fromstage(struct appendstate *as, struct body **body,
 
     /* Handle flags the user wants to set in the message */
     if (flags) {
-	r = append_apply_flags(as, &record, flags);
+	r = append_apply_flags(as, mboxevent, &record, flags);
 	if (r) goto out;
     }
     /* Write out index file entry */
@@ -977,6 +1009,14 @@ out:
 	append_abort(as);
 	return r;
     }
+
+    /* finish filling the event notification */
+
+    /* XXX avoid to parse ENVELOPE record since Message-Id is already
+     * present in body structure ? */
+    mboxevent_extract_record(mboxevent, mailbox, &record);
+    mboxevent_extract_mailbox(mboxevent, mailbox);
+    mboxevent_set_numunseen(mboxevent, mailbox, -1);
 
     return 0;
 }
@@ -1025,6 +1065,7 @@ EXPORTED int append_fromstream(struct appendstate *as, struct body **body,
     char *fname;
     FILE *destfile;
     int r;
+    struct mboxevent *mboxevent = NULL;
 
     assert(size != 0);
 
@@ -1045,19 +1086,29 @@ EXPORTED int append_fromstream(struct appendstate *as, struct body **body,
 	goto out;
     }
 
+    /* prepare a new notification for this appended message
+     * the event type must be set with MessageNew or MessageAppend */
+    if (as->event_type) {
+	mboxevent = mboxevent_enqueue(as->event_type, &as->mboxevents);
+    }
+
     /* Copy and parse message */
     r = message_copy_strict(messagefile, destfile, size, 0);
     if (!r) {
 	if (!*body || (as->nummsg - 1))
 	    r = message_parse_file(destfile, NULL, NULL, body);
 	if (!r) r = message_create_record(&record, *body);
+
+	/* messageContent may be included with MessageAppend and MessageNew */
+	if (!r)
+	    mboxevent_extract_content(mboxevent, &record, destfile);
     }
     fclose(destfile);
     if (r) goto out;
 
     /* Handle flags the user wants to set in the message */
     if (flags) {
-	r = append_apply_flags(as, &record, flags);
+	r = append_apply_flags(as, mboxevent, &record, flags);
 	if (r) goto out;
     }
 
@@ -1071,6 +1122,14 @@ out:
 	return r;
     }
     
+    /* finish filling the event notification */
+
+    /* XXX avoid to parse ENVELOPE record since Message-Id is already
+     * present in body structure */
+    mboxevent_extract_record(mboxevent, mailbox, &record);
+    mboxevent_extract_mailbox(mboxevent, mailbox);
+    mboxevent_set_numunseen(mboxevent, mailbox, -1);
+
     return 0;
 }
 
@@ -1126,7 +1185,7 @@ HIDDEN int append_run_annotator(struct appendstate *as,
 
     record->system_flags &= FLAG_SEEN;
     memset(&record->user_flags, 0, sizeof(record->user_flags));
-    r = append_apply_flags(as, record, &flags);
+    r = append_apply_flags(as, NULL, record, &flags);
     if (r) goto out;
 
     r = mailbox_get_annotate_state(as->mailbox, record->uid, &astate);
@@ -1180,10 +1239,16 @@ EXPORTED int append_copy(struct mailbox *mailbox,
     int r = 0;
     int flag, userflag;
     annotate_state_t *astate = NULL;
+    struct mboxevent *mboxevent = NULL;
     
     if (!nummsg) {
 	append_abort(as);
 	return 0;
+    }
+
+    /* prepare a single vnd.cmu.MessageCopy notification for all messages */
+    if (as->event_type) {
+	mboxevent = mboxevent_enqueue(as->event_type, &as->mboxevents);
     }
 
     /* Copy/link all files and cache info */
@@ -1219,6 +1284,8 @@ EXPORTED int append_copy(struct mailbox *mailbox,
 	    append_setseen(as, &record);
 	}
 
+	/* XXX fill flagnames event parameter here */
+
 	/* Link/copy message file */
 	free(destfname);
 	srcfname = xstrdup(mailbox_message_fname(mailbox, copymsg[msg].uid));
@@ -1251,6 +1318,11 @@ EXPORTED int append_copy(struct mailbox *mailbox,
 			      as->mailbox, record.uid,
 			      as->userid);
 	if (r) goto out;
+
+	mboxevent_extract_record(mboxevent, as->mailbox, &record);
+	mboxevent_extract_copied_record(mboxevent, mailbox, copymsg[msg].uid);
+	mboxevent_extract_mailbox(mboxevent, as->mailbox);
+	mboxevent_set_numunseen(mboxevent, as->mailbox, -1);
     }
 
 out:
