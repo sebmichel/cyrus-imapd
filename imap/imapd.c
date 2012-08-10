@@ -5453,7 +5453,7 @@ static void cmd_create(char *tag, char *name, struct dlist *extargs, int localon
 	r = mboxlist_createmailbox(mailboxname, 0, partition,
 				   imapd_userisadmin || imapd_userisproxyadmin, 
 				   imapd_userid, imapd_authstate,
-				   localonly, localonly, 0, extargs);
+				   localonly, localonly, 0, extargs, 1);
 
 	if (r == IMAP_PERMISSION_DENIED && !strcasecmp(name, "INBOX") &&
 	    (autocreatequotastorage = config_getint(IMAPOPT_AUTOCREATEQUOTA))) {
@@ -5461,7 +5461,7 @@ static void cmd_create(char *tag, char *name, struct dlist *extargs, int localon
 	    /* Auto create */
 	    r = mboxlist_createmailbox(mailboxname, 0, partition, 
 				       1, imapd_userid, imapd_authstate,
-				       0, 0, 0, extargs);
+				       0, 0, 0, extargs, 1);
 	    
 	    int autocreatequotamessage = config_getint(IMAPOPT_AUTOCREATEQUOTAMSG);
 	    if (!r && ((autocreatequotastorage > 0) || (autocreatequotamessage > 0))) {
@@ -5503,18 +5503,18 @@ static int delmbox(char *name,
     if (!mboxlist_delayed_delete_isenabled()) {
         r = mboxlist_deletemailbox(name,
 				   imapd_userisadmin || imapd_userisproxyadmin,
-                                   imapd_userid, imapd_authstate,
+                                   imapd_userid, imapd_authstate, NULL,
                                    0, 0, 0);
     } else if ((imapd_userisadmin || imapd_userisproxyadmin) && 
 	       mboxname_isdeletedmailbox(name, NULL)) {
         r = mboxlist_deletemailbox(name,
 				   imapd_userisadmin || imapd_userisproxyadmin,
-                                   imapd_userid, imapd_authstate,
+                                   imapd_userid, imapd_authstate, NULL,
                                    0, 0, 0);
     } else {
         r = mboxlist_delayed_deletemailbox(name,
 					   imapd_userisadmin || imapd_userisproxyadmin,
-                                           imapd_userid, imapd_authstate,
+                                           imapd_userid, imapd_authstate, NULL,
                                            0, 0);
     }
     
@@ -5534,6 +5534,7 @@ static void cmd_delete(char *tag, char *name, int localonly, int force)
     int r;
     char mailboxname[MAX_MAILBOX_BUFFER];
     struct mboxlist_entry *mbentry = NULL;
+    struct mboxevent *mboxevent = NULL;
     char *p;
 
     r = (*imapd_namespace.mboxname_tointernal)(&imapd_namespace, name,
@@ -5588,26 +5589,33 @@ static void cmd_delete(char *tag, char *name, int localonly, int force)
     }
     mboxlist_entry_free(&mbentry);
 
+    mboxevent = mboxevent_new(EVENT_MAILBOX_DELETE);
+
     /* local mailbox */
     if (!r) {
         if (localonly || !mboxlist_delayed_delete_isenabled()) {
             r = mboxlist_deletemailbox(mailboxname,
 				       imapd_userisadmin || imapd_userisproxyadmin,
-                                       imapd_userid, imapd_authstate, 
+                                       imapd_userid, imapd_authstate, mboxevent,
                                        1-force, localonly, 0);
         } else if ((imapd_userisadmin || imapd_userisproxyadmin) &&
                    mboxname_isdeletedmailbox(mailboxname, NULL)) {
             r = mboxlist_deletemailbox(mailboxname,
 				       imapd_userisadmin || imapd_userisproxyadmin,
-                                       imapd_userid, imapd_authstate,
+                                       imapd_userid, imapd_authstate, mboxevent,
                                        0 /* checkacl */, localonly, 0);
         } else {
             r = mboxlist_delayed_deletemailbox(mailboxname,
 					       imapd_userisadmin || imapd_userisproxyadmin,
-                                               imapd_userid, imapd_authstate,
+                                               imapd_userid, imapd_authstate, mboxevent,
                                                1-force, 0);
         }
     }
+
+    /* send a MailboxDelete event notification */
+    if (!r)
+	mboxevent_notify(mboxevent);
+    mboxevent_free(&mboxevent);
 
     /* was it a top-level user mailbox? */
     /* localonly deletes are only per-mailbox */
@@ -5695,9 +5703,10 @@ static int renmbox(char *name,
 
     strcpy(text->newmailboxname + text->nl, name + text->ol);
 
+    /* don't notify implied rename in mailbox hierarchy */
     r = mboxlist_renamemailbox(name, text->newmailboxname,
 			       text->partition, 0 /* uidvalidity */,
-			       1, imapd_userid, imapd_authstate, 0,
+			       1, imapd_userid, imapd_authstate, NULL, 0,
                                text->rename_user);
     
     (*imapd_namespace.mboxname_toexternal)(&imapd_namespace,
@@ -5991,14 +6000,27 @@ static void cmd_rename(char *tag, char *oldname, char *newname, char *partition)
 
     /* attempt to rename the base mailbox */
     if (!r) {
+	struct mboxevent *mboxevent = NULL;
+
+	/* don't send rename notification if we only change the partition */
+	if (strcmp(oldmailboxname, newmailboxname))
+	    mboxevent = mboxevent_new(EVENT_MAILBOX_RENAME);
+
 	r = mboxlist_renamemailbox(oldmailboxname, newmailboxname, partition,
 				   0 /* uidvalidity */, imapd_userisadmin, 
-				   imapd_userid, imapd_authstate, 0, rename_user);
+				   imapd_userid, imapd_authstate, mboxevent,
+				   0, rename_user);
 	/* it's OK to not exist if there are subfolders */
 	if (r == IMAP_MAILBOX_NONEXISTENT && subcount && !rename_user &&
 	   mboxname_userownsmailbox(imapd_userid, oldmailboxname) &&
-	   mboxname_userownsmailbox(imapd_userid, newmailboxname))
+	   mboxname_userownsmailbox(imapd_userid, newmailboxname)) {
+	    mboxevent_free(&mboxevent);
 	    goto submboxes;
+	}
+	/* send a MailboxRename event notification if enabled */
+	if (!r)
+	    mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
     }
 
     /* If we're renaming a user, take care of changing quotaroot, ACL,
@@ -10055,7 +10077,7 @@ static int xfer_delete(struct xfer_header *xfer)
 	    /* note also that we need to remember to let proxyadmins do this */
 	    r = mboxlist_deletemailbox(item->mbentry->name,
 				       imapd_userisadmin || imapd_userisproxyadmin,
-				       imapd_userid, imapd_authstate, 0, 1, 0);
+				       imapd_userid, imapd_authstate, NULL, 0, 1, 0);
 	    if (r) {
 		syslog(LOG_ERR,
 		       "Could not delete local mailbox during move of %s",

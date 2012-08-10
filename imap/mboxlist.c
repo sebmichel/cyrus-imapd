@@ -756,14 +756,28 @@ EXPORTED int mboxlist_createmailbox(const char *name, int mbtype,
 			   int isadmin, const char *userid, 
 			   struct auth_state *auth_state,
 			   int localonly, int forceuser, int dbonly,
-			   struct dlist *extargs)
+			   struct dlist *extargs, int notify)
 {
     int options = config_getint(IMAPOPT_MAILBOX_DEFAULT_OPTIONS)
 		  | OPT_POP3_NEW_UIDL;
-    return mboxlist_createmailbox_full(name, mbtype, partition,
-				       isadmin, userid, auth_state,
-				       options, 0, NULL, NULL, localonly,
-				       forceuser, dbonly, NULL, extargs);
+    int r;
+    struct mailbox *mailbox = NULL;
+
+    r = mboxlist_createmailbox_full(name, mbtype, partition,
+				    isadmin, userid, auth_state,
+				    options, 0, NULL, NULL, localonly,
+				    forceuser, dbonly, &mailbox, extargs);
+
+    if (notify && !r) {
+	/* send a MailboxCreate event notification */
+	struct mboxevent *mboxevent = mboxevent_new(EVENT_MAILBOX_CREATE);
+	mboxevent_extract_mailbox(mboxevent, mailbox);
+	mailbox_close(&mailbox);
+
+	mboxevent_notify(mboxevent);
+	mboxevent_free(&mboxevent);
+    }
+    return r;
 }
 
 EXPORTED int mboxlist_createsync(const char *name, int mbtype,
@@ -896,7 +910,8 @@ EXPORTED int mboxlist_deleteremote(const char *name, struct txn **in_tid)
 EXPORTED int
 mboxlist_delayed_deletemailbox(const char *name, int isadmin,
 			       const char *userid,
-			       struct auth_state *auth_state, int checkacl,
+			       struct auth_state *auth_state,
+			       struct mboxevent *mboxevent, int checkacl,
 			       int force)
 {
     struct mboxlist_entry *mbentry = NULL;
@@ -954,7 +969,7 @@ mboxlist_delayed_deletemailbox(const char *name, int isadmin,
     r = mboxlist_renamemailbox((char *)name, newname, mbentry->partition,
 			       0 /* uidvalidity */,
                                1 /* isadmin */, userid,
-                               auth_state, force, 1);
+                               auth_state, mboxevent, force, 1);
 
     mboxlist_entry_free(&mbentry);
 
@@ -976,7 +991,8 @@ mboxlist_delayed_deletemailbox(const char *name, int isadmin,
  */
 EXPORTED int mboxlist_deletemailbox(const char *name, int isadmin,
 			   const char *userid,
-			   struct auth_state *auth_state, int checkacl,
+			   struct auth_state *auth_state,
+			   struct mboxevent *mboxevent, int checkacl,
 			   int local_only, int force)
 {
     struct mboxlist_entry *mbentry = NULL;
@@ -1067,7 +1083,13 @@ EXPORTED int mboxlist_deletemailbox(const char *name, int isadmin,
     if (!isremote && mailbox) {
 	/* only on a real delete do we delete from the remote end as well */
 	sync_log_unmailbox(mailbox->name);
+	mboxevent_extract_mailbox(mboxevent, mailbox);
 	r = mailbox_delete(&mailbox);
+
+	/* abort event notification */
+	if (r && mboxevent)
+	    mboxevent_free(&mboxevent);
+
     }
 
  done:
@@ -1086,6 +1108,7 @@ EXPORTED int mboxlist_renamemailbox(const char *oldname, const char *newname,
 			   const char *partition, unsigned uidvalidity,
 			   int isadmin, const char *userid,
 			   struct auth_state *auth_state,
+			   struct mboxevent *mboxevent,
 			   int forceuser, int ignorequota)
 {
     int r;
@@ -1292,6 +1315,17 @@ EXPORTED int mboxlist_renamemailbox(const char *oldname, const char *newname,
 	mailbox_close(&oldmailbox);
     } else {
 	if (newmailbox) {
+	    /* prepare the event notification */
+	    if (mboxevent) {
+		/* case of delayed delete */
+		if (mboxevent->type == EVENT_MAILBOX_DELETE)
+		    mboxevent_extract_mailbox(mboxevent, oldmailbox);
+		else {
+		    mboxevent_extract_mailbox(mboxevent, newmailbox);
+		    mboxevent_extract_old_mailbox(mboxevent, oldmailbox);
+		}
+	    }
+
 	    mailbox_rename_cleanup(&oldmailbox, isusermbox);
 	    mailbox_close(&newmailbox);
 	}

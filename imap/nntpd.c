@@ -3418,8 +3418,9 @@ static int newgroup(message_data_t *msg)
     snprintf(mailboxname, sizeof(mailboxname), "%s%.*s",
 	     newsprefix, (int) strcspn(group, " \t\r\n"), group);
 
+    /* XXX do we need to notify news mailbox creation ? */
     r = mboxlist_createmailbox(mailboxname, 0, NULL, 0,
-			       newsmaster, newsmaster_authstate, 0, 0, 0);
+			       newsmaster, newsmaster_authstate, 0, 0, 0, NULL, 1);
 
     /* XXX check body of message for useful MIME parts */
 
@@ -3446,7 +3447,7 @@ static int rmgroup(message_data_t *msg)
 
     if (!r) r = mboxlist_deletemailbox(mailboxname, 0,
 				       newsmaster, newsmaster_authstate,
-				       1, 0, 0);
+				       NULL, 0, 0, 0);
 
     if (!r) sync_log_mailbox(mailboxname);
 
@@ -3478,7 +3479,7 @@ static int mvgroup(message_data_t *msg)
 	     newsprefix, (int)len, group);
 
     r = mboxlist_renamemailbox(oldmailboxname, newmailboxname, NULL, 0,
-			       newsmaster, newsmaster_authstate, 0, 0);
+			       newsmaster, newsmaster_authstate, NULL, 0, 0);
 
     /* XXX check body of message for useful MIME parts */
 
