@@ -5343,12 +5343,11 @@ static void index_thread_ref(struct index_state *state, unsigned *msgno_list, in
  * NNTP specific stuff.
  */
 EXPORTED char *index_get_msgid(struct index_state *state,
-		      uint32_t msgno)
+			       uint32_t msgno)
 {
-    struct mailbox *mailbox = state->mailbox;
     struct index_map *im = &state->map[msgno-1];
 
-    return mailbox_cache_get_msgid(mailbox, &im->record);
+    return mailbox_cache_get_msgid(state->mailbox, &im->record);
 }
 
 static void massage_header(char *hdr)

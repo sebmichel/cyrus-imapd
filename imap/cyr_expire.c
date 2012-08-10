@@ -77,6 +77,9 @@
 static volatile sig_atomic_t sigquit = 0;
 static int verbose = 0;
 
+/* current namespace */
+static struct namespace expire_namespace;
+
 static void usage(void)
 {
     fprintf(stderr,
@@ -414,6 +417,13 @@ int main(int argc, char *argv[])
 
     /* setup for mailbox event notifications */
     mboxevent_init();
+
+    /* Set namespace -- force standard (internal) */
+    if ((r = mboxname_init_namespace(&expire_namespace, 1)) != 0) {
+	syslog(LOG_ERR, "%s", error_message(r));
+	fatal(error_message(r), EC_CONFIG);
+    }
+    mboxevent_setnamespace(&expire_namespace);
 
     if (duplicate_init(NULL) != 0) {
 	fprintf(stderr, 

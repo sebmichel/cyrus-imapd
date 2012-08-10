@@ -61,7 +61,6 @@
 #include <ctype.h>
 
 #include "annotate.h" /* for strlist functionality */
-#include "mboxevent.h"
 #include "message_guid.h"
 #include "sequence.h"
 #include "strarray.h"

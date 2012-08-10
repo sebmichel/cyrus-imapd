@@ -45,7 +45,6 @@
 #ifndef _MBOXEVENT_H
 #define _MBOXEVENT_H
 
-#include "hash.h"
 #include "strarray.h"
 
 #include "mailbox.h"
@@ -82,7 +81,7 @@ enum event_type {
     EVENT_MAILBOX_UNSUBSCRIBE = (1<<18)
 };
 
-#define MAX_PARAM 22 /* messageContent number that is always the last */
+#define MAX_PARAM 21 /* messageContent number that is always the last */
 
 /*
  * event parameters defined in RFC 5423 - Internet Message Store Events
@@ -90,7 +89,6 @@ enum event_type {
  * ordered to optimize the parsing of the notification message
  */
 enum event_param {
-    EVENT_HOST,
     EVENT_TIMESTAMP,
     EVENT_SERVICE,
     EVENT_SERVER_ADDRESS, /* gather serverDomain and serverPort together */

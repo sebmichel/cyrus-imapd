@@ -64,9 +64,6 @@
 #include "mboxname.h"
 #include "notify.h"
 
-#ifndef EVENT_VERSION
-#define EVENT_VERSION 1
-#endif
 
 #define MESSAGE_EVENTS (EVENT_MESSAGE_APPEND|EVENT_MESSAGE_EXPIRE|\
 			EVENT_MESSAGE_EXPUNGE|EVENT_MESSAGE_NEW|\
@@ -107,8 +104,7 @@ static unsigned long extra_params;
 static struct mboxevent event_template =
 { 0,
   /* ordered to optimize the parsing of the notification message */
-  { { EVENT_HOST, "vnd.cmu.host", EVENT_PARAM_STRING, 0, 0 },
-    { EVENT_TIMESTAMP, "timestamp", EVENT_PARAM_STRING, 0, 0 },
+  { { EVENT_TIMESTAMP, "timestamp", EVENT_PARAM_STRING, 0, 0 },
     { EVENT_SERVICE, "service", EVENT_PARAM_STRING, 0, 0 },
     { EVENT_SERVER_ADDRESS, "serverAddress", EVENT_PARAM_STRING, 0, 0 },
     { EVENT_CLIENT_ADDRESS, "clientAddress", EVENT_PARAM_STRING, 0, 0 },
@@ -135,10 +131,6 @@ static struct mboxevent event_template =
   STRARRAY_INITIALIZER, { 0, 0 }, NULL, STRARRAY_INITIALIZER, NULL, NULL
 };
 
-#if 0
-static char *properties_formatter(enum event_type type,
-                                  struct event_parameter params[]);
-#endif
 #ifdef HAVE_LIBJSON
 static struct json_object *json_formatter(enum event_type type,
                                           struct event_parameter params[]);
@@ -368,8 +360,6 @@ static int mboxevent_expected_param(enum event_type type, enum event_param param
     case EVENT_USER:
 	return type & (EVENT_MAILBOX_SUBSCRIBE|EVENT_MAILBOX_UNSUBSCRIBE|\
 		       EVENT_LOGIN|EVENT_LOGOUT);
-    case EVENT_HOST:
-	return extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_VND_CMU_HOST;
     case EVENT_MIDSET:
 	if (!(extra_params & IMAP_ENUM_EVENT_EXTRA_PARAMS_VND_CMU_MIDSET))
 	    return 0;
@@ -386,7 +376,6 @@ static int mboxevent_expected_param(enum event_type type, enum event_param param
     return type & (MESSAGE_EVENTS|FLAGS_EVENTS);
 }
 
-static const char *event_to_name(enum event_type type);
 #define TIMESTAMP_MAX 32
 EXPORTED void mboxevent_notify(struct mboxevent *mboxevents)
 {
@@ -455,10 +444,6 @@ EXPORTED void mboxevent_notify(struct mboxevent *mboxevents)
 
 	if (event->uidset) {
 	    FILL_STRING_PARAM(event, EVENT_UIDSET, seqset_cstring(event->uidset));
-	}
-	/* XXX this legacy parameter is not needed since mailboxID is an IMAP URL */
-	if (mboxevent_expected_param(event->type, EVENT_HOST)) {
-	    FILL_STRING_PARAM(event, EVENT_HOST, xstrdup(config_servername));
 	}
 	if (strarray_size(&event->midset) > 0) {
 	    FILL_ARRAY_PARAM(event, EVENT_MIDSET, &event->midset);
@@ -1095,61 +1080,6 @@ static char *json_formatter(enum event_type type, struct event_parameter params[
     xjson_end(&json);
 
     return xjson_cstring(&json);
-}
-#endif
-
-#if 0
-static char *properties_formatter(enum event_type type, struct event_parameter params[])
-{
-    struct buf buffer = BUF_INITIALIZER;
-    strarray_t *sarray;
-    char *val;
-    int param;
-
-    buf_printf(&buffer, "version=%d\n", EVENT_VERSION);
-    buf_printf(&buffer, "event=%s\n", event_to_name(type));
-
-    for (param = 0; param <= MAX_PARAM; param++) {
-
-	if (!params[param].filled)
-	    continue;
-
-	switch (params[param].id) {
-	case EVENT_CLIENT_ADDRESS:
-	    /* come from saslprops structure */
-	    val = (char *)params[param].value;
-	    buf_printf(&buffer, "clientIP=%.*s\n",
-	               (int)(strchr(val, ';') - val), val);
-	    buf_printf(&buffer, "clientPort=%s\n", strchr(val, ';') + 1);
-	    break;
-	case EVENT_SERVER_ADDRESS:
-	    /* come from saslprops structure */
-	    val = (char *)params[param].value;
-	    buf_printf(&buffer, "serverDomain=%.*s\n",
-	               (int)(strchr(val, ';') - val), val);
-	    buf_printf(&buffer, "serverPort=%s\n", strchr(val, ';') + 1);
-	    break;
-	default:
-	    switch (params[param].type) {
-	    case EVENT_PARAM_INT:
-		buf_printf(&buffer, "%s=%ld\n",
-		           params[param].name, params[param].value);
-		break;
-	    case EVENT_PARAM_STRING:
-		buf_printf(&buffer, "%s=%s\n",
-		           params[param].name, (char *)params[param].value);
-		break;
-	    case EVENT_PARAM_ARRAY:
-		sarray = (strarray_t *)params[param].value;
-		buf_printf(&buffer, "%s=%s\n",
-		           params[param].name, strarray_join(sarray, " "));
-		break;
-	    }
-	    break;
-	}
-    }
-
-    return buf_release(&buffer);
 }
 #endif
 
