@@ -345,7 +345,7 @@ imap_ctl_deliver_SOURCES = imap/cli_fatal.c imap/ctl_deliver.c imap/mutex_fake.c
 imap_ctl_deliver_LDADD = $(LD_UTILITY_ADD)
 
 imap_ctl_mboxlist_SOURCES = imap/cli_fatal.c imap/ctl_mboxlist.c imap/mutex_fake.c
-imap_ctl_mboxlist_LDADD = $(LD_UTILITY_ADD)
+imap_ctl_mboxlist_LDADD = $(LD_UTILITY_ADD) ${LIB_SASL}
 
 imap_cvt_cyrusdb_SOURCES = imap/cli_fatal.c imap/cvt_cyrusdb.c imap/mutex_fake.c
 imap_cvt_cyrusdb_LDADD = $(LD_UTILITY_ADD)
@@ -360,7 +360,7 @@ imap_cyr_df_SOURCES = imap/cli_fatal.c imap/cyr_df.c imap/mutex_fake.c
 imap_cyr_df_LDADD = $(LD_UTILITY_ADD)
 
 imap_cyr_expire_SOURCES = imap/cli_fatal.c imap/cyr_expire.c imap/mutex_fake.c
-imap_cyr_expire_LDADD = $(LD_UTILITY_ADD)
+imap_cyr_expire_LDADD = $(LD_UTILITY_ADD) ${LIB_SASL}
 
 imap_cyr_info_SOURCES = imap/cli_fatal.c imap/cyr_info.c imap/mutex_fake.c master/masterconf.c
 imap_cyr_info_LDADD = $(LD_UTILITY_ADD)
@@ -378,7 +378,7 @@ imap_cyr_userseen_LDADD = $(LD_UTILITY_ADD)
 #imap_cyr_virusscan_LDADD = $(LD_UTILITY_ADD) -lclamav
 
 imap_deliver_SOURCES = imap/deliver.c imap/lmtpengine.c imap/lmtpstats.c imap/mutex_fake.c imap/proxy.c imap/spool.c
-imap_deliver_LDADD = $(LD_UTILITY_ADD)
+imap_deliver_LDADD = $(LD_UTILITY_ADD) ${LIB_SASL}
 
 imap_fetchnews_SOURCES = imap/cli_fatal.c imap/fetchnews.c imap/mutex_fake.c
 imap_fetchnews_LDADD = $(LD_UTILITY_ADD)
@@ -396,7 +396,7 @@ imap_imapd_LDADD =
 if SIEVE
 imap_imapd_LDADD += sieve/libcyrus_sieve.la
 endif
-imap_imapd_LDADD += $(LD_SERVER_ADD)
+imap_imapd_LDADD += $(LD_SERVER_ADD) ${LIB_SASL} $(SSL_LIBS)
 
 imap_ipurge_SOURCES = imap/cli_fatal.c imap/ipurge.c imap/mutex_fake.c
 imap_ipurge_LDADD = $(LD_UTILITY_ADD)
@@ -440,7 +440,7 @@ if SIEVE
 imap_lmtpd_SOURCES += imap/lmtp_sieve.c imap/smtpclient.c
 imap_lmtpd_LDADD += sieve/libcyrus_sieve.la
 endif
-imap_lmtpd_LDADD += $(LD_SERVER_ADD)
+imap_lmtpd_LDADD += $(LD_SERVER_ADD) ${LIB_SASL}
 
 imap/lmtpstats.c: imap/lmtpstats.snmp snmp/snmpgen
 	cd imap && ../${top_srcdir}/snmp/snmpgen ../${top_srcdir}/imap/lmtpstats.snmp
@@ -458,13 +458,13 @@ imap_mbtool_SOURCES = imap/cli_fatal.c imap/mbtool.c imap/mutex_fake.c
 imap_mbtool_LDADD = $(LD_UTILITY_ADD)
 
 imap_mupdate_SOURCES = imap/mupdate.c imap/mupdate-slave.c imap/mutex_pthread.c master/service-thread.c
-imap_mupdate_LDADD = $(LD_SERVER_ADD) -lpthread
+imap_mupdate_LDADD = $(LD_SERVER_ADD) ${LIB_SASL} $(SSL_LIBS) -lpthread
 
 nodist_imap_nntpd_SOURCES = imap/nntp_err.c imap/nntp_err.h
 imap_nntpd_SOURCES = imap/mutex_fake.c imap/nntpd.c \
 	imap/proxy.c imap/smtpclient.c imap/smtpclient.h imap/spool.c \
 	imap/spool.h master/service.c
-imap_nntpd_LDADD = $(LD_SERVER_ADD)
+imap_nntpd_LDADD = $(LD_SERVER_ADD) ${LIB_SASL}
 
 imap_pop3d_SOURCES = imap/mutex_fake.c imap/pop3d.c imap/proxy.c master/service.c \
 		     imap/autocreate.h imap/autocreate.c
@@ -472,7 +472,7 @@ imap_pop3d_LDADD =
 if SIEVE
 imap_pop3d_LDADD += sieve/libcyrus_sieve.la
 endif
-imap_pop3d_LDADD += $(LD_SERVER_ADD)
+imap_pop3d_LDADD += $(LD_SERVER_ADD) ${LIB_SASL}
 
 imap_quota_SOURCES = imap/cli_fatal.c imap/mutex_fake.c imap/quota.c
 imap_quota_LDADD = $(LD_UTILITY_ADD)
@@ -493,7 +493,7 @@ imap_sync_reset_SOURCES = imap/mutex_fake.c imap/sync_reset.c imap/sync_support.
 imap_sync_reset_LDADD = $(LD_UTILITY_ADD)
 
 imap_sync_server_SOURCES = imap/mutex_fake.c imap/sync_server.c imap/sync_support.c master/service.c
-imap_sync_server_LDADD = $(LD_SERVER_ADD)
+imap_sync_server_LDADD = $(LD_SERVER_ADD) ${LIB_SASL}
 
 imap_tls_prune_SOURCES = imap/cli_fatal.c imap/mutex_fake.c imap/tls_prune.c
 imap_tls_prune_LDADD = $(LD_UTILITY_ADD)
@@ -519,7 +519,7 @@ imap/rfc822_header.h: imap/rfc822_header.st
 endif
 
 imtest_imtest_SOURCES = imtest/imtest.c
-imtest_imtest_LDADD = $(LD_BASIC_ADD)
+imtest_imtest_LDADD = $(LD_BASIC_ADD) ${LIB_SASL} $(SSL_LIBS)
 imtest_imtest_CFLAGS = $(AM_CFLAGS) $(CFLAG_VISIBILITY)
 
 nodist_lib_libcyrus_la_SOURCES = lib/chartable.c
@@ -693,7 +693,7 @@ timsieved_timsieved_SOURCES = imap/mutex_fake.c imap/proxy.c master/service.c \
 	timsieved/mystring.c timsieved/mystring.h timsieved/parser.c \
 	timsieved/parser.h timsieved/scripttest.c timsieved/scripttest.h \
 	timsieved/timsieved.c
-timsieved_timsieved_LDADD = sieve/libcyrus_sieve.la $(LD_SERVER_ADD)
+timsieved_timsieved_LDADD = sieve/libcyrus_sieve.la $(LD_SERVER_ADD) ${LIB_SASL}
 
 GIT_VERSION = $(PACKAGE_VERSION).git$(shell date +'%Y%m%d%H%M')
 
