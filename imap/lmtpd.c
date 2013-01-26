@@ -1032,6 +1032,7 @@ void shut_down(int code)
     tls_shutdown_serverengine();
 #endif
     if (deliver_out) {
+	prot_printf(deliver_out, "421 4.3.2 Shutdown\r\n");
 	prot_flush(deliver_out);
 
 	/* one less active connection */

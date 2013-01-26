@@ -684,6 +684,7 @@ void shut_down(int code)
     }
 
     if (popd_out) {
+	prot_printf(popd_out, "-ERR [SYS/TEMP] Shutdown\r\n");
 	prot_flush(popd_out);
 	bytes_out = prot_bytes_out(popd_out);
 	prot_free(popd_out);

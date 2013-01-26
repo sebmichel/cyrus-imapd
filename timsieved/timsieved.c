@@ -153,6 +153,7 @@ void shut_down(int code)
 
     /* cleanup */
     if (sieved_out) {
+	prot_printf(sieved_out, "BYE (SYS/TEMP) \"Shutdown\"\r\n");
 	prot_flush(sieved_out);
 	prot_free(sieved_out);
     }

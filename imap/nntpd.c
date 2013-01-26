@@ -679,6 +679,7 @@ void shut_down(int code)
     }
 
     if (nntp_out) {
+	prot_printf(nntp_out, "400 Shutdown\r\n");
 	prot_flush(nntp_out);
 	prot_free(nntp_out);
     }

@@ -1085,6 +1085,7 @@ void shut_down(int code)
     }
     
     if (imapd_out) {
+	prot_printf(imapd_out, "* BYE Shutdown\r\n");
 	/* Flush the outgoing buffer */
 	prot_flush(imapd_out);
 	bytes_out = prot_bytes_out(imapd_out);
