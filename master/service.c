@@ -424,6 +424,11 @@ int main(int argc, char **argv, char **envp)
 	/* lock */
 	lockaccept();
 
+	if (!signals_poll()) {
+	    /* waiting for incoming connection, we want to leave as soon as possible
+	     * upon SIGHUP. */
+	    signals_reset_sighup_handler(0);
+	}
 	fd = -1;
 	while (fd < 0 && !signals_poll()) { /* loop until we succeed */
 	    /* check current process file inode, size and mtime */
@@ -484,6 +489,7 @@ int main(int argc, char **argv, char **envp)
 		r = recvfrom(LISTEN_FD, (void *) &ch, 1, MSG_PEEK,
 			     (struct sockaddr *) &from, &fromlen);
 		if (r == -1) {
+		    if (signals_poll() == SIGHUP) break;
 		    syslog(LOG_ERR, "recvfrom failed: %m");
 		    if (MESSAGE_MASTER_ON_EXIT) 
 			notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
@@ -492,13 +498,18 @@ int main(int argc, char **argv, char **envp)
 		fd = LISTEN_FD;
 	    }
 	}
+	/* we don't want to be interrupted by SIGHUP anymore */
+	signals_reset_sighup_handler(1);
 
 	/* unlock */
 	unlockaccept();
 
 	if (fd < 0 && (signals_poll() || newfile)) {
 	    /* timed out (SIGALRM), SIGHUP, or new process file */
-	    if (MESSAGE_MASTER_ON_EXIT) 
+	    /* Without pselect, wake-up master to speed up janitoring */
+#if !HAVE_PSELECT
+	    if (MESSAGE_MASTER_ON_EXIT)
+#endif
 		notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	    service_abort(0);
 	}
