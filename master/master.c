@@ -1276,6 +1276,8 @@ static void sigquit_handler(int sig __attribute__((unused)))
 
 static void begin_shutdown(void)
 {
+    int i;
+
     /* Set a flag so main loop knows to shut down when
        all children have exited.  Note, we will be called
        twice as we send SIGTERM to our own process group. */
@@ -1293,6 +1295,20 @@ static void begin_shutdown(void)
     if (kill(0, SIGTERM) < 0) {
 	syslog(LOG_ERR, "begin_shutdown: kill(0, SIGTERM): %m");
     }
+
+    /* order matters here: we must first signal the children before shutting down
+     * the listening sockets */
+
+    /* shutdown listening sockets */
+    for (i = 0; i < nservices; i++) {
+	if (Services[i].socket >= 0) {
+	    shutdown(Services[i].socket, SHUT_RDWR);
+	    xclose(Services[i].socket);
+	}
+    }
+
+    /* release pidfile */
+    xclose(pidfd);
 }
 
 static volatile sig_atomic_t gotsigchld = 0;
@@ -2031,6 +2047,8 @@ int main(int argc, char **argv)
 #endif
 
     struct timeval now;
+    struct timeval gracefulshutdown_mark;
+    int gracefulshutdown_timeout = -1;
 
     p = getenv("CYRUS_VERBOSE");
     if (p) verbose = atoi(p) + 1;
@@ -2194,27 +2212,14 @@ int main(int argc, char **argv)
 
     limit_fds(RLIM_INFINITY);
 
-    /* Write out the pidfile */
-    pidfd = open(pidfile, O_CREAT|O_RDWR, 0644);
-    if(pidfd == -1) {
-	int exit_result = EX_OSERR;
+    gracefulshutdown_timeout = config_getint(IMAPOPT_GRACEFULSHUTDOWN_TIMEOUT);
 
-	/* Tell our parent that we failed. */
-	(void)write(startup_pipe[1], &exit_result, sizeof(exit_result));
-
-	syslog(LOG_ERR, "can't open pidfile: %m");
-	exit(EX_OSERR);
-    } else {
-	char buf[100];
-
-	if(lock_nonblocking(pidfd)) {
-	    int exit_result = EX_OSERR;
-
-	    /* Tell our parent that we failed. */
-	    (void)write(startup_pipe[1], &exit_result, sizeof(exit_result));
-
-	    fatal("cannot get exclusive lock on pidfile (is another master still running?)", EX_OSERR);
-	} else {
+    /* A previous master may be gracefully shutting down */
+    for (i = 5; i >= 0; i--) {
+        /* Write out the pidfile */
+        pidfd = open(pidfile, O_CREAT|O_RDWR, 0644);
+        if ((pidfd != -1) && !lock_nonblocking(pidfd)) {
+	    char buf[100];
 	    int pidfd_flags = fcntl(pidfd, F_GETFD, 0);
 	    if (pidfd_flags != -1)
 		pidfd_flags = fcntl(pidfd, F_SETFD,
@@ -2242,7 +2247,36 @@ int main(int argc, char **argv)
 	    }
 	    if (fsync(pidfd))
 		fatalf(EX_OSERR, "unable to sync pidfile: %m");
-	}
+
+	    break;
+        }
+
+        if (!i) {
+            /* That was our last attempt. */
+            int exit_result = EX_OSERR;
+
+            /* Tell our parent that we failed. */
+            (void)write(startup_pipe[1], &exit_result, sizeof(exit_result));
+
+            if (pidfd == -1) {
+                syslog(LOG_ERR, "can't open pidfile: %m");
+                exit(EX_OSERR);
+            }
+            else {
+                fatal("cannot get exclusive lock on pidfile (is another master still running?)", EX_OSERR);
+            }
+        }
+
+        if (pidfd == -1) {
+            syslog(LOG_ERR, "can't open pidfile, %d attempt(s) remaining: %m", i);
+        }
+        else {
+            syslog(LOG_INFO, "cannot get exclusive lock on pidfile, %d attempt(s) remaining: %m", i);
+            xclose(pidfd);
+        }
+
+        /* wait a bit before the next attempt */
+        usleep(250000);
     }
 
     if(daemon_mode) {
@@ -2327,6 +2361,10 @@ int main(int argc, char **argv)
 #endif
 	if (gotsigquit) {
 	    gotsigquit = 0;
+	    if (!in_shutdown && (gracefulshutdown_timeout > 0)) {
+		gettimeofday(&gracefulshutdown_mark, NULL);
+		gracefulshutdown_mark.tv_sec += gracefulshutdown_timeout;
+	    }
 	    begin_shutdown();
 	}
 
@@ -2447,6 +2485,36 @@ int main(int argc, char **argv)
 	    else {
 		tv.tv_sec = 0;
 		tv.tv_usec = 0;
+	    }
+	    tvptr = &tv;
+	}
+	else if (in_shutdown && (gracefulshutdown_timeout > 0)) {
+	    struct timeval rightnow;
+
+	    gettimeofday(&rightnow, NULL);
+	    if ((rightnow.tv_sec > gracefulshutdown_mark.tv_sec) ||
+		((rightnow.tv_sec >= gracefulshutdown_mark.tv_sec)
+		&& (rightnow.tv_usec >= gracefulshutdown_mark.tv_usec)))
+	    {
+		/* time is over, let's begin the killing spree */
+		syslog(LOG_NOTICE, "Graceful shutdown timeout reached, killing group");
+
+		/* Send a second TERM signal to our group, to terminate any
+		 * remaining process. */
+		if (kill(0, SIGTERM) < 0) {
+		    syslog(LOG_ERR, "kill(0, SIGQUIT): %m");
+		}
+		exit(0);
+	    }
+
+	    tv.tv_sec = gracefulshutdown_mark.tv_sec - rightnow.tv_sec;
+	    if (rightnow.tv_usec > gracefulshutdown_mark.tv_usec) {
+		tv.tv_sec--;
+		tv.tv_usec = (1000000 + gracefulshutdown_mark.tv_usec)
+		    - rightnow.tv_usec;
+	    }
+	    else {
+		tv.tv_usec = gracefulshutdown_mark.tv_usec - rightnow.tv_usec;
 	    }
 	    tvptr = &tv;
 	}

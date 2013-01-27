@@ -508,6 +508,10 @@ Blank lines and lines beginning with ``#'' are ignored.
    server must be quiesced and then the directories moved with the
    \fBrehash\fR utility. */
 
+{ "gracefulshutdown_timeout", -1, INT }
+/* Time limit (seconds) to perform a graceful shutdown. A negative value
+   means there is no limit. */
+
 { "hashimapspool", 0, SWITCH }
 /* If enabled, the partitions will also be hashed, in addition to the
    hashing done on configuration directories.  This is recommended if
