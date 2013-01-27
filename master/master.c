@@ -235,6 +235,18 @@ static void get_prog(char *path, unsigned size, const strarray_t *cmd)
     else snprintf(path, size, "%s/%s", SERVICE_DIR, cmd->data[0]);
 }
 
+static const char *protocol_family(int family)
+{
+    switch (family) {
+    case AF_UNIX:	return "unix"; break;
+    case AF_INET:	return "ipv4"; break;
+    case AF_INET6:	return "ipv6"; break;
+    default:		break;
+    }
+
+    return "unknown";
+}
+
 static void get_statsock(int filedes[2])
 {
     int r, fdflags;
@@ -385,12 +397,64 @@ static int verify_service_file(const strarray_t *filename)
 static void service_forget_exec(struct service *s)
 {
     if (s->exec) {
-	/* Only free the service info on the primary */
-	if (s->.associate == 0) {
-	    strarray_free(s->exec);
-	}
+	strarray_free(s->exec);
 	s->exec = NULL;
     }
+}
+
+static struct service *service_find(struct service *s, int prot_family)
+{
+    int i;
+    int j = -1;
+
+    for (i = 0; i < nservices; i++) {
+	/* our first choice is an exact match */
+	if ((Services[i].name && !strcmp(Services[i].name, s->name)) &&
+	    (Services[i].listen && !strcmp(Services[i].listen, s->listen)) &&
+	    (Services[i].proto && !strcmp(Services[i].proto, s->proto)) &&
+	    (Services[i].family == prot_family))
+	    break;
+
+	/* our second choice is an available entry */
+	if ((j == -1) && !Services[i].name &&
+	    !Services[i].listen && !Services[i].proto)
+	    j = i;
+    }
+
+    if ((i == nservices) && (j != -1)) {
+	/* the service did not already exist, but we have an available entry */
+	i = j;
+    }
+
+    return (i == nservices) ? NULL : &Services[i];
+}
+
+static void service_deactivate_associated(struct service *s)
+{
+    int i;
+
+    service_forget_exec(s);
+    for (i = 0; i < nservices; i++) {
+	if ((Services[i].associate > 0) &&
+	    Services[i].name && !strcmp(Services[i].name, s->name) &&
+	    Services[i].listen && !strcmp(Services[i].listen, s->listen) &&
+	    Services[i].proto && !strcmp(Services[i].proto, s->proto))
+	{
+	    service_forget_exec(&Services[i]);
+	}
+    }
+}
+
+static void service_dup(struct service *to, const struct service *from)
+{
+    memcpy(to, from, sizeof(struct service));
+    /* Duplicating configuration is necessary because primary
+     * service may end (and be freed) before its non-primary ones.
+     */
+    to->name = strdup(from->name);
+    to->listen = strdup(from->listen);
+    to->proto = strdup(from->proto);
+    to->exec = strarray_dup(from->exec);
 }
 
 static struct service *service_add(const struct service *proto)
@@ -406,7 +470,7 @@ static struct service *service_add(const struct service *proto)
     s = &Services[nservices++];
 
     if (proto)
-	memcpy(s, proto, sizeof(struct service));
+	service_dup(s, proto);
     else
 	memset(s, 0, sizeof(struct service));
 
@@ -415,7 +479,10 @@ static struct service *service_add(const struct service *proto)
 
 static void service_create(struct service *s)
 {
-    struct service service0, service;
+    struct service service;
+    int associate = 0;
+    struct service *s0 = s;
+    int primary_failed = 1;
     struct addrinfo hints, *res0, *res;
     int error, nsocket = 0;
     struct sockaddr_un sunsock;
@@ -432,6 +499,10 @@ static void service_create(struct service *s)
 		EX_SOFTWARE);
 
     if (s->listen[0] == '/') { /* unix socket */
+	if (s->socket > 0) {
+	    /* there are no non-primary services, and nothing else to do */
+	    return;
+	}
 	res0_is_local = 1;
 	res0 = (struct addrinfo *)xzmalloc(sizeof(struct addrinfo));
 	res0->ai_flags = AI_PASSIVE;
@@ -482,7 +553,7 @@ static void service_create(struct service *s)
 	} else {
 	    syslog(LOG_INFO, "invalid proto '%s', disabling %s",
 		   s->proto, s->name);
-	    service_forget_exec(s);
+	    service_deactivate_associated(s);
 	    return;
 	}
 
@@ -508,24 +579,65 @@ static void service_create(struct service *s)
 
 	if (error) {
 	    syslog(LOG_INFO, "%s, disabling %s", gai_strerror(error), s->name);
-	    service_forget_exec(s);
+	    service_deactivate_associated(s);
 	    return;
 	}
     }
 
-    memcpy(&service0, s, sizeof(struct service));
-
-    for (res = res0; res; res = res->ai_next) {
-	if (s->socket > 0) {
-	    memcpy(&service, &service0, sizeof(struct service));
-	    s = &service;
+    for (res = res0; res; res = res->ai_next, associate++) {
+	if (associate > 0) {
+	    /* find existing/available entry, or prepare to create a new one */
+	    s = service_find(s, res->ai_family);
+	    if (!s) {
+		memcpy(&service, s0, sizeof(struct service));
+		s = &service;
+	    }
+	    else if (s->socket > 0) {
+		/* service still active, nothing to do */
+		if (verbose) {
+		    syslog(LOG_DEBUG, "service %s/%s still active",
+			s->name, protocol_family(res->ai_family));
+		}
+		s->nreadyfails = 0;
+		nsocket++;
+		continue;
+	    }
+	    else if (!s->name) {
+		/* we got an available entry */
+		service_dup(s, s0);
+	    }
 	}
+	else if (s->socket > 0) {
+	    /* service still active, nothing to do */
+	    if (verbose) {
+		syslog(LOG_DEBUG, "service %s/%s still active",
+		    s->name, protocol_family(res->ai_family));
+	    }
+	    primary_failed = 0;
+	    s->nreadyfails = 0;
+	    nsocket++;
+	    continue;
+	}
+
+	s->associate = associate;
+	s->family = res->ai_family;
+	/* Reset counters: should already be done for newly activated primary,
+	 * but is necessary for (re-)activated non-primary services since the
+	 * structure content was copied from a possibly active primary service.
+	 */
+	s->ready_workers = 0;
+	s->nforks = 0;
+	s->nactive = 0;
+	s->nconnections = 0;
+	s->nreadyfails = 0;
 
 	s->socket = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 	if (s->socket < 0) {
 	    s->socket = 0;
 	    if (verbose > 2)
-		syslog(LOG_ERR, "unable to open %s socket: %m", s->name);
+		syslog(LOG_ERR, "unable to open %s/%s socket: %m",
+		    s->name, protocol_family(res->ai_family));
+	    if ((associate > 0) && (s != &service)) service_forget_exec(s);
 	    continue;
 	}
 
@@ -561,7 +673,9 @@ static void service_create(struct service *s)
 	    close(s->socket);
 	    s->socket = 0;
 	    if (verbose > 2)
-		syslog(LOG_ERR, "unable to bind to %s socket: %m", s->name);
+		syslog(LOG_ERR, "unable to bind to %s/%s socket: %m",
+		    s->name, protocol_family(res->ai_family));
+	    if ((associate > 0) && (s != &service)) service_forget_exec(s);
 	    continue;
 	}
 
@@ -574,18 +688,19 @@ static void service_create(struct service *s)
 	if ((!strcmp(s->proto, "tcp") || !strcmp(s->proto, "tcp4")
 	     || !strcmp(s->proto, "tcp6"))
 	    && listen(s->socket, listen_queue_backlog) < 0) {
-	    syslog(LOG_ERR, "unable to listen to %s socket: %m", s->name);
+	    syslog(LOG_ERR, "unable to listen to %s/%s socket: %m",
+		s->name, protocol_family(res->ai_family));
 	    close(s->socket);
 	    s->socket = 0;
+	    if ((associate > 0) && (s != &service)) service_forget_exec(s);
 	    continue;
 	}
 
-	s->ready_workers = 0;
-	s->associate = nsocket;
-	s->family = res->ai_family;
-
 	get_statsock(s->stat);
 
+	if (associate == 0) {
+	    primary_failed = 0;
+	}
 	if (s == &service)
 	    service_add(s);
 	nsocket++;
@@ -596,10 +711,11 @@ static void service_create(struct service *s)
 	else
 	    freeaddrinfo(res0);
     }
+    if (primary_failed) {
+	service_forget_exec(s0);
+    }
     if (nsocket <= 0) {
 	syslog(LOG_ERR, "unable to create %s listener socket: %m", s->name);
-	service_forget_exec(s);
-	return;
     }
 }
 
@@ -763,10 +879,16 @@ static void spawn_service(int si)
 
     switch (p = fork()) {
     case -1:
-	syslog(LOG_ERR, "can't fork process to run service %s: %m", s->name);
+	syslog(LOG_ERR, "can't fork process to run service %s/%s: %m",
+	    s->name, protocol_family(s->family));
 	break;
 
     case 0:
+	if (verbose > 2) {
+	    syslog(LOG_DEBUG, "forked process to run service %s/%s",
+		s->name, protocol_family(s->family));
+	}
+
 	/* Child - Release our pidfile lock. */
 	if(pidfd != -1) close(pidfd);
 
@@ -983,9 +1105,10 @@ static void reap_child(void)
 		break;
 	    default:
 		syslog(LOG_CRIT,
-		       "service %s pid %d in ILLEGAL STATE: exited. Serious "
+		       "service %s/%s pid %d in ILLEGAL STATE: exited. Serious "
 		       "software bug or memory corruption detected!",
-		       s ? SERVICENAME(s->name) : "unknown", pid);
+		       s ? SERVICENAME(s->name) : "unknown",
+		       s ? protocol_family(s->family) : "unknown", pid);
 		centry_set_state(c, SERVICE_STATE_UNKNOWN);
 	    }
 	    if (s) {
@@ -996,16 +1119,16 @@ static void reap_child(void)
 		    s->ready_workers--;
 		    if (!in_shutdown && failed) {
 			syslog(LOG_WARNING,
-			       "service %s pid %d in READY state: "
+			       "service %s/%s pid %d in READY state: "
 			       "terminated abnormally",
-			       SERVICENAME(s->name), pid);
+			       SERVICENAME(s->name),
+			       protocol_family(s->family), pid);
 			if (++s->nreadyfails >= MAX_READY_FAILS && s->exec) {
 			    syslog(LOG_ERR, "too many failures for "
-				   "service %s, disabling until next SIGHUP",
-				   SERVICENAME(s->name));
+				   "service %s/%s, disabling until next SIGHUP",
+				   SERVICENAME(s->name),
+				   protocol_family(s->family));
 			    service_forget_exec(s);
-			    if (s->socket > 0) close(s->socket);
-			    s->socket = 0;
 			}
 		    }
 		    break;
@@ -1013,26 +1136,29 @@ static void reap_child(void)
 		case SERVICE_STATE_DEAD:
 		    /* uh? either we got duplicate signals, or we are now MT */
 		    syslog(LOG_WARNING,
-			   "service %s pid %d in DEAD state: "
+			   "service %s/%s pid %d in DEAD state: "
 			   "receiving duplicate signals",
-			   SERVICENAME(s->name), pid);
+			   SERVICENAME(s->name),
+			   protocol_family(s->family), pid);
 		    break;
 
 		case SERVICE_STATE_BUSY:
 		    s->nactive--;
 		    if (!in_shutdown && failed) {
 			syslog(LOG_DEBUG,
-			       "service %s pid %d in BUSY state: "
+			       "service %s/%s pid %d in BUSY state: "
 			       "terminated abnormally",
-			       SERVICENAME(s->name), pid);
+			       SERVICENAME(s->name),
+			       protocol_family(s->family), pid);
 		    }
 		    break;
 
 		case SERVICE_STATE_UNKNOWN:
 		    s->nactive--;
 		    syslog(LOG_WARNING,
-			   "service %s pid %d in UNKNOWN state: exited",
-			   SERVICENAME(s->name), pid);
+			   "service %s/%s pid %d in UNKNOWN state: exited",
+			   SERVICENAME(s->name),
+			   protocol_family(s->family), pid);
 		    break;
 		default:
 		    /* Shouldn't get here */
@@ -1058,8 +1184,9 @@ static void reap_child(void)
 	    /* FIXME: is this something we should take lightly? */
 	}
 	if (verbose && c && (c->si != SERVICE_NONE))
-	    syslog(LOG_DEBUG, "service %s now has %d ready workers\n",
+	    syslog(LOG_DEBUG, "service %s/%s now has %d ready workers",
 		    SERVICENAME(Services[c->si].name),
+		    protocol_family(Services[c->si].family),
 		    Services[c->si].ready_workers);
     }
 }
@@ -1302,8 +1429,8 @@ static void process_msg(int si, struct notify_message *msg)
 	 * Note that this analysis depends on master's single-threaded
 	 * nature */
 	syslog(LOG_WARNING,
-		"service %s pid %d: receiving messages from long dead children",
-	       SERVICENAME(s->name), msg->service_pid);
+		"service %s/%s pid %d: receiving messages from long dead children",
+	       SERVICENAME(s->name), protocol_family(s->family), msg->service_pid);
 	/* re-add child to list */
 	c = centry_alloc();
 	centry_set_name(c, "ZOMBIE", NULL, NULL);
@@ -1315,16 +1442,17 @@ static void process_msg(int si, struct notify_message *msg)
     /* paranoia */
     if (si != c->si) {
 	syslog(LOG_ERR,
-	       "service %s pid %d: changing from service %s due to received message",
-	       SERVICENAME(s->name), c->pid,
-	       ((c->si != SERVICE_NONE && Services[c->si].name) ? Services[c->si].name : "unknown"));
+	       "service %s/%s pid %d: changing from service %s/%s due to received message",
+	       SERVICENAME(s->name), protocol_family(s->family), c->pid,
+	       ((c->si != SERVICE_NONE && Services[c->si].name) ? Services[c->si].name : "unknown"),
+	       ((c->si != SERVICE_NONE) ? protocol_family(Services[c->si].family) : "unknown"));
 	c->si = si;
     }
     switch (c->service_state) {
     case SERVICE_STATE_UNKNOWN:
 	syslog(LOG_WARNING,
-	       "service %s pid %d in UNKNOWN state: processing message 0x%x",
-	       SERVICENAME(s->name), c->pid, msg->message);
+	       "service %s/%s pid %d in UNKNOWN state: processing message 0x%x",
+	       SERVICENAME(s->name), protocol_family(s->family), c->pid, msg->message);
 	break;
     case SERVICE_STATE_READY:
     case SERVICE_STATE_BUSY:
@@ -1332,8 +1460,8 @@ static void process_msg(int si, struct notify_message *msg)
 	break;
     default:
 	syslog(LOG_CRIT,
-	       "service %s pid %d in ILLEGAL state: detected. Serious software bug or memory corruption uncloaked while processing message 0x%x from child!",
-	       SERVICENAME(s->name), c->pid, msg->message);
+	       "service %s/%s pid %d in ILLEGAL state: detected. Serious software bug or memory corruption uncloaked while processing message 0x%x from child!",
+	       SERVICENAME(s->name), protocol_family(s->family), c->pid, msg->message);
 	centry_set_state(c, SERVICE_STATE_UNKNOWN);
 	break;
     }
@@ -1345,24 +1473,24 @@ static void process_msg(int si, struct notify_message *msg)
 	case SERVICE_STATE_READY:
 	    /* duplicate message? */
 	    syslog(LOG_WARNING,
-		   "service %s pid %d in READY state: sent available message but it is already ready",
-		   SERVICENAME(s->name), c->pid);
+		   "service %s/%s pid %d in READY state: sent available message but it is already ready",
+		   SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    break;
 
 	case SERVICE_STATE_UNKNOWN:
 	    /* since state is unknwon, error in non-DoS way, i.e.
 	     * we don't increment ready_workers */
 	    syslog(LOG_DEBUG,
-		   "service %s pid %d in UNKNOWN state: now available and in READY state",
-		   SERVICENAME(s->name), c->pid);
+		   "service %s/%s pid %d in UNKNOWN state: now available and in READY state",
+		   SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    centry_set_state(c, SERVICE_STATE_READY);
 	    break;
 
 	case SERVICE_STATE_BUSY:
 	    if (verbose)
 		syslog(LOG_DEBUG,
-		       "service %s pid %d in BUSY state: now available and in READY state",
-		       SERVICENAME(s->name), c->pid);
+		       "service %s/%s pid %d in BUSY state: now available and in READY state",
+		       SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    centry_set_state(c, SERVICE_STATE_READY);
 	    s->ready_workers++;
 	    break;
@@ -1382,22 +1510,22 @@ static void process_msg(int si, struct notify_message *msg)
 	case SERVICE_STATE_BUSY:
 	    /* duplicate message? */
 	    syslog(LOG_WARNING,
-		   "service %s pid %d in BUSY state: sent unavailable message but it is already busy",
-		   SERVICENAME(s->name), c->pid);
+		   "service %s/%s pid %d in BUSY state: sent unavailable message but it is already busy",
+		   SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    break;
 
 	case SERVICE_STATE_UNKNOWN:
 	    syslog(LOG_DEBUG,
-		   "service %s pid %d in UNKNOWN state: now unavailable and in BUSY state",
-		   SERVICENAME(s->name), c->pid);
+		   "service %s/%s pid %d in UNKNOWN state: now unavailable and in BUSY state",
+		   SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    centry_set_state(c, SERVICE_STATE_BUSY);
 	    break;
 
 	case SERVICE_STATE_READY:
 	    if (verbose)
 		syslog(LOG_DEBUG,
-		       "service %s pid %d in READY state: now unavailable and in BUSY state",
-		       SERVICENAME(s->name), c->pid);
+		       "service %s/%s pid %d in READY state: now unavailable and in BUSY state",
+		       SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    centry_set_state(c, SERVICE_STATE_BUSY);
 	    s->ready_workers--;
 	    break;
@@ -1418,22 +1546,22 @@ static void process_msg(int si, struct notify_message *msg)
 	    s->nconnections++;
 	    if (verbose)
 		syslog(LOG_DEBUG,
-		       "service %s pid %d in BUSY state: now serving connection",
-		       SERVICENAME(s->name), c->pid);
+		       "service %s/%s pid %d in BUSY state: now serving connection",
+		       SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    break;
 
 	case SERVICE_STATE_UNKNOWN:
 	    s->nconnections++;
 	    centry_set_state(c, SERVICE_STATE_BUSY);
 	    syslog(LOG_DEBUG,
-		   "service %s pid %d in UNKNOWN state: now in BUSY state and serving connection",
-		   SERVICENAME(s->name), c->pid);
+		   "service %s/%s pid %d in UNKNOWN state: now in BUSY state and serving connection",
+		   SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    break;
 
 	case SERVICE_STATE_READY:
 	    syslog(LOG_ERR,
-		   "service %s pid %d in READY state: reported new connection, forced to BUSY state",
-		   SERVICENAME(s->name), c->pid);
+		   "service %s/%s pid %d in READY state: reported new connection, forced to BUSY state",
+		   SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    /* be resilient on face of a bogon source, so lets err to the side
 	     * of non-denial-of-service */
 	    centry_set_state(c, SERVICE_STATE_BUSY);
@@ -1458,14 +1586,14 @@ static void process_msg(int si, struct notify_message *msg)
 	    s->nconnections++;
 	    if (verbose)
 		syslog(LOG_DEBUG,
-		       "service %s pid %d in READY state: serving one more multi-threaded connection",
-		       SERVICENAME(s->name), c->pid);
+		       "service %s/%s pid %d in READY state: serving one more multi-threaded connection",
+		       SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    break;
 
 	case SERVICE_STATE_BUSY:
 	    syslog(LOG_ERR,
-		   "service %s pid %d in BUSY state: serving one more multi-threaded connection, forced to READY state",
-		   SERVICENAME(s->name), c->pid);
+		   "service %s/%s pid %d in BUSY state: serving one more multi-threaded connection, forced to READY state",
+		   SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    /* be resilient on face of a bogon source, so lets err to the side
 	     * of non-denial-of-service */
 	    centry_set_state(c, SERVICE_STATE_READY);
@@ -1477,8 +1605,8 @@ static void process_msg(int si, struct notify_message *msg)
 	    s->nconnections++;
 	    centry_set_state(c, SERVICE_STATE_READY);
 	    syslog(LOG_ERR,
-		   "service %s pid %d in UNKNOWN state: serving one more multi-threaded connection, forced to READY state",
-		   SERVICENAME(s->name), c->pid);
+		   "service %s/%s pid %d in UNKNOWN state: serving one more multi-threaded connection, forced to READY state",
+		   SERVICENAME(s->name), protocol_family(s->family), c->pid);
 	    break;
 
 	case SERVICE_STATE_DEAD:
@@ -1493,14 +1621,14 @@ static void process_msg(int si, struct notify_message *msg)
 	break;
 
     default:
-	syslog(LOG_CRIT, "service %s pid %d: Software bug: unrecognized message 0x%x",
-	       SERVICENAME(s->name), c->pid, msg->message);
+	syslog(LOG_CRIT, "service %s/%s pid %d: Software bug: unrecognized message 0x%x",
+	       SERVICENAME(s->name), protocol_family(s->family), c->pid, msg->message);
 	break;
     }
 
     if (verbose)
-	syslog(LOG_DEBUG, "service %s now has %d ready workers\n",
-	       SERVICENAME(s->name), s->ready_workers);
+	syslog(LOG_DEBUG, "service %s/%s now has %d ready workers",
+	       SERVICENAME(s->name), protocol_family(s->family), s->ready_workers);
 }
 
 static void add_start(const char *name, struct entry *e,
@@ -1548,15 +1676,26 @@ static void add_service(const char *name, struct entry *e, void *rock)
     }
 
     /* see if we have an existing entry that can be reused */
+    j = -1;
     for (i = 0; i < nservices; i++) {
 	/* skip non-primary instances */
 	if (Services[i].associate > 0)
 	    continue;
-	/* must have empty/same service name, listen and proto */
-	if ((!Services[i].name || !strcmp(Services[i].name, name)) &&
-	    (!Services[i].listen || !strcmp(Services[i].listen, listen)) &&
-	    (!Services[i].proto || !strcmp(Services[i].proto, proto)))
+
+	/* our first choice is an exact match */
+	if ((Services[i].name && !strcmp(Services[i].name, name)) &&
+	    (Services[i].listen && !strcmp(Services[i].listen, listen)) &&
+	    (Services[i].proto && !strcmp(Services[i].proto, proto)))
 	    break;
+
+	/* our second choice is an available entry */
+	if ((j == -1) && !Services[i].name &&
+	    !Services[i].listen && !Services[i].proto)
+	    j = i;
+    }
+    if ((i == nservices) && (j != -1)) {
+	/* the service did not already exist, but we have an available entry */
+	i = j;
     }
 
     /* we have duplicate service names in the config file */
@@ -1623,7 +1762,11 @@ static void add_service(const char *name, struct entry *e, void *rock)
 	    if (Services[j].associate > 0 && Services[j].listen &&
 		Services[j].name && !strcmp(Services[j].name, name)) {
 		Services[j].maxforkrate = Services[i].maxforkrate;
-		Services[j].exec = Services[i].exec;
+		if (Services[j].listen) free(Services[j].listen);
+		Services[j].listen = strdup(Services[i].listen);
+		if (Services[j].proto) free (Services[j].proto);
+		Services[j].proto = strdup(Services[i].proto);
+		Services[j].exec = strarray_dup(Services[i].exec);
 		Services[j].desired_workers = Services[i].desired_workers;
 		Services[j].babysit = Services[i].babysit;
 		Services[j].max_workers = Services[i].max_workers;
@@ -1755,6 +1898,7 @@ static void reread_conf(void)
     int i,j;
     struct event *ptr;
     struct centry *c;
+    struct timeval now;
 
     /* disable all services -
        they will be re-enabled if they appear in config file */
@@ -1768,16 +1912,14 @@ static void reread_conf(void)
 	    /* cleanup newly disabled services */
 
 	    if (verbose > 2)
-		syslog(LOG_DEBUG, "disable: service %s socket %d pipe %d %d",
-		       Services[i].name, Services[i].socket,
+		syslog(LOG_DEBUG, "disable: service %s/%s socket %d pipe %d %d",
+		       Services[i].name, protocol_family(Services[i].family),
+		       Services[i].socket,
 		       Services[i].stat[0], Services[i].stat[1]);
 
-	    /* Only free the service info on the primary */
-	    if(Services[i].associate == 0) {
-		free(Services[i].listen);
-		free(Services[i].proto);
-	    }
+	    free(Services[i].listen);
 	    Services[i].listen = NULL;
+	    free(Services[i].proto);
 	    Services[i].proto = NULL;
 	    Services[i].desired_workers = 0;
 
@@ -1805,9 +1947,20 @@ static void reread_conf(void)
 
 	    service_create(&Services[i]);
 	    if (verbose > 2)
-		syslog(LOG_DEBUG, "init: service %s socket %d pipe %d %d",
-		       Services[i].name, Services[i].socket,
+		syslog(LOG_DEBUG, "init: service %s/%s socket %d pipe %d %d",
+		       Services[i].name, protocol_family(Services[i].family),
+		       Services[i].socket,
 		       Services[i].stat[0], Services[i].stat[1]);
+	}
+	else {
+	    /* remaining service: we may have to (re-)activate non-primary instances */
+
+	    service_create(&Services[i]);
+	    if (verbose > 2) {
+		syslog(LOG_DEBUG, "reinit: service %s/%s socket %d pipe %d %d",
+		   Services[i].name, protocol_family(Services[i].family),
+		   Services[i].socket, Services[i].stat[0], Services[i].stat[1]);
+	    }
 	}
     }
 
@@ -1824,6 +1977,16 @@ static void reread_conf(void)
 
     /* reinit child janitor */
     init_janitor();
+
+    /* Since there may have been changes in services (new or reactivated ones)
+     * schedule a wakeup call right now */
+    ptr = (struct event *) xzmalloc(sizeof(struct event));
+
+    gettimeofday(&now, 0);
+    ptr->name = xstrdup("conf reread wakeup call");
+    ptr->mark = now;
+
+    schedule_event(ptr);
 
     /* send some feedback to admin */
     syslog(LOG_NOTICE,
@@ -2124,8 +2287,9 @@ int main(int argc, char **argv)
     for (i = 0; i < nservices; i++) {
 	service_create(&Services[i]);
 	if (verbose > 2)
-	    syslog(LOG_DEBUG, "init: service %s socket %d pipe %d %d",
-		   Services[i].name, Services[i].socket,
+	    syslog(LOG_DEBUG, "init: service %s/%s socket %d pipe %d %d",
+		   Services[i].name, protocol_family(Services[i].family),
+		   Services[i].socket,
 		   Services[i].stat[0], Services[i].stat[1]);
     }
 
@@ -2178,28 +2342,37 @@ int main(int argc, char **argv)
 			  && Services[i].babysit
 			  && Services[i].nactive == 0) {
 		    syslog(LOG_ERR,
-			  "lost all children for service: %s.  " \
+			  "lost all children for service: %s/%s.  " \
 			  "Applying babysitter.",
-			  Services[i].name);
+			  Services[i].name, protocol_family(Services[i].family));
 		    spawn_service(i);
 		} else if (!Services[i].exec /* disabled */ &&
 			  Services[i].name /* not yet removed */ &&
 			  Services[i].nactive == 0) {
 		    if (verbose > 2)
-			syslog(LOG_DEBUG, "remove: service %s pipe %d %d",
-			      Services[i].name,
+			syslog(LOG_DEBUG, "remove: service %s/%s pipe %d %d",
+			      Services[i].name, protocol_family(Services[i].family),
 			      Services[i].stat[0], Services[i].stat[1]);
 
-		    /* Only free the service info on the primary */
-		    if (Services[i].associate == 0) {
-			free(Services[i].name);
-		    }
+		    free(Services[i].name);
 		    Services[i].name = NULL;
 		    Services[i].nforks = 0;
 		    Services[i].nactive = 0;
 		    Services[i].nconnections = 0;
+		    Services[i].nreadyfails = 0;
 		    Services[i].associate = 0;
 
+		    if (Services[i].listen) free(Services[i].listen);
+		    Services[i].listen = NULL;
+		    if (Services[i].proto) free(Services[i].proto);
+		    Services[i].proto = NULL;
+
+		    /* close all listeners */
+		    if (Services[i].socket > 0) {
+			shutdown(Services[i].socket, SHUT_RDWR);
+			close(Services[i].socket);
+		    }
+		    Services[i].socket = 0;
 		    if (Services[i].stat[0] > 0) close(Services[i].stat[0]);
 		    if (Services[i].stat[1] > 0) close(Services[i].stat[1]);
 		    memset(Services[i].stat, 0, sizeof(Services[i].stat));
@@ -2228,27 +2401,28 @@ int main(int argc, char **argv)
 	    /* messages */
 	    if (x > 0) {
 		if (verbose > 2)
-		    syslog(LOG_DEBUG, "listening for messages from %s",
-			   Services[i].name);
+		    syslog(LOG_DEBUG, "listening for messages from %s/%s",
+			   Services[i].name, protocol_family(Services[i].family));
 		FD_SET(x, &rfds);
 	    }
 	    if (x > maxfd) maxfd = x;
 
 	    /* connections */
 	    if (y > 0 && Services[i].ready_workers == 0 &&
+		Services[i].exec &&
 		Services[i].nactive < Services[i].max_workers &&
 		!service_is_fork_limited(&Services[i])) {
 		if (verbose > 2)
-		    syslog(LOG_DEBUG, "listening for connections for %s",
-			   Services[i].name);
+		    syslog(LOG_DEBUG, "listening for connections for %s/%s",
+			   Services[i].name, protocol_family(Services[i].family));
 		FD_SET(y, &rfds);
 		if (y > maxfd) maxfd = y;
 	    }
 
 	    /* paranoia */
 	    if (Services[i].ready_workers < 0) {
-		syslog(LOG_ERR, "%s has %d workers?!?", Services[i].name,
-		       Services[i].ready_workers);
+		syslog(LOG_ERR, "%s/%s has %d workers?!?", Services[i].name,
+		       protocol_family(Services[i].family), Services[i].ready_workers);
 	    }
 	}
 	maxfd++;		/* need 1 greater than maxfd */
