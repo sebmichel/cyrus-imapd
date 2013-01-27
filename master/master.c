@@ -122,7 +122,6 @@
 #include "strarray.h"
 
 enum {
-    become_cyrus_early = 1,
     child_table_size = 10000,
     child_table_inc = 100
 };
@@ -2336,13 +2335,6 @@ int main(int argc, char **argv)
 		   Services[i].name, protocol_family(Services[i].family),
 		   Services[i].socket,
 		   Services[i].stat[0], Services[i].stat[1]);
-    }
-
-    if (become_cyrus_early) {
-	if (become_cyrus() != 0) {
-	    syslog(LOG_ERR, "can't change to the cyrus user: %m");
-	    exit(1);
-	}
     }
 
     /* init ctable janitor */
