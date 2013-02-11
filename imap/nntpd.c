@@ -3823,6 +3823,7 @@ static void news2mail(message_data_t *msg)
 {
     struct buf attrib = BUF_INITIALIZER;
     int n, r;
+    FILE *sm_fds[2];
     FILE *sm;
     static strarray_t smbuf = STRARRAY_INITIALIZER;
     static int smbuf_basic_count;
@@ -3859,10 +3860,15 @@ static void news2mail(message_data_t *msg)
 
     /* send the message */
     if (smbuf.count > smbuf_basic_count) {
-	sm_pid = open_sendmail((const char **)smbuf.data, &sm);
+	int failed = 0;
 
-	if (!sm)
+	sm_pid = open_sendmail((const char **)smbuf.data, sm_fds);
+	sm = sm_fds[0];
+
+	if (!sm) {
+	    failed = 1;
 	    syslog(LOG_ERR, "news2mail: could not spawn sendmail process");
+	}
 	else {
 	    int body = 0, skip, found_to = 0;
 
@@ -3910,12 +3916,15 @@ static void news2mail(message_data_t *msg)
 	    /* Protect against messages not ending in CRLF */
 	    if (buf[strlen(buf)-1] != '\n') fprintf(sm, "\r\n");
 
-	    fclose(sm);
-	    while (waitpid(sm_pid, &sm_stat, 0) < 0);
-
-	    if (sm_stat) /* sendmail exit value */
+	    close_sendmail(sm_pid, sm_fds, &sm_stat);
+	    if (sm_stat) { /* sendmail exit value */
+		failed = 1;
 		syslog(LOG_ERR, "news2mail failed: %s",
 		       sendmail_errstr(sm_stat));
+	    }
+	}
+	if (failed) {
+	    prot_printf(nntp_out, "451 transient system error\r\n");
 	}
 
 	/* free the RCPTs */

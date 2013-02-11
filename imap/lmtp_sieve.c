@@ -221,6 +221,7 @@ static int send_rejection(const char *origid,
 			  const char *reason, 
 			  struct protstream *file)
 {
+    FILE *sm_fds[2];
     FILE *sm;
     const char *smbuf[10];
     char buf[8192], *namebuf;
@@ -237,7 +238,8 @@ static int send_rejection(const char *origid,
     smbuf[4] = "--";
     smbuf[5] = rejto;
     smbuf[6] = NULL;
-    sm_pid = open_sendmail(smbuf, &sm);
+    sm_pid = open_sendmail(smbuf, sm_fds);
+    sm = sm_fds[0];
     if (sm == NULL) {
 	return -1;
     }
@@ -306,8 +308,7 @@ static int send_rejection(const char *origid,
     fprintf(sm, "\r\n\r\n");
     fprintf(sm, "--%d/%s--\r\n", (int) p, config_servername);
 
-    fclose(sm);
-    while (waitpid(sm_pid, &sm_stat, 0) < 0);
+    close_sendmail(sm_pid, sm_fds, &sm_stat);
 
     return sm_stat;	/* sendmail exit value */
 }
@@ -316,6 +317,7 @@ static int send_forward(const char *forwardto,
 			char *return_path,
 			struct protstream *file)
 {
+    FILE *sm_fds[2];
     FILE *sm;
     const char *smbuf[10];
     int sm_stat;
@@ -335,7 +337,8 @@ static int send_forward(const char *forwardto,
     smbuf[4] = "--";
     smbuf[5] = forwardto;
     smbuf[6] = NULL;
-    sm_pid = open_sendmail(smbuf, &sm);
+    sm_pid = open_sendmail(smbuf, sm_fds);
+    sm = sm_fds[0];
 	
     if (sm == NULL) {
 	return -1;
@@ -362,8 +365,7 @@ static int send_forward(const char *forwardto,
 		 prot_fgets(buf, sizeof(buf), file));
     }
 
-    fclose(sm);
-    while (waitpid(sm_pid, &sm_stat, 0) < 0);
+    close_sendmail(sm_pid, sm_fds, &sm_stat);
 
     return sm_stat;	/* sendmail exit value */
 }
@@ -635,6 +637,7 @@ static int send_response(void *ac,
 			 void *ic __attribute__((unused)), 
 			 void *sc, void *mc, const char **errmsg)
 {
+    FILE *sm_fds[2];
     FILE *sm;
     const char *smbuf[10];
     char outmsgid[8192], *sievedb;
@@ -654,7 +657,8 @@ static int send_response(void *ac,
     smbuf[4] = "--";
     smbuf[5] = src->addr;
     smbuf[6] = NULL;
-    sm_pid = open_sendmail(smbuf, &sm);
+    sm_pid = open_sendmail(smbuf, sm_fds);
+    sm = sm_fds[0];
     if (sm == NULL) {
 	*errmsg = "Could not spawn sendmail process";
 	return -1;
@@ -700,8 +704,7 @@ static int send_response(void *ac,
     if (src->mime) {
 	fprintf(sm, "\r\n--%d/%s--\r\n", (int) p, config_servername);
     }
-    fclose(sm);
-    while (waitpid(sm_pid, &sm_stat, 0) < 0);
+    close_sendmail(sm_pid, sm_fds, &sm_stat);
 
     if (sm_stat == 0) { /* sendmail exit value */
 	sievedb = make_sieve_db(sdata->username);

@@ -48,6 +48,7 @@
 #include <unistd.h>
 #endif
 #include <stdio.h>
+#include <syslog.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -58,40 +59,122 @@
 
 extern void fatal(const char *buf, int code);
 
-pid_t open_sendmail(const char *argv[], FILE **sm)
+pid_t open_sendmail(const char *argv[], FILE *sm[2])
 {
-    int fds[2];
-    FILE *ret;
+    int fds_in[2];
+    int fds_out[2];
+    int fdflags;
     pid_t p;
 
-    if (pipe(fds)) {
-	printf("451 lmtpd: didn't start pipe()?!?\r\n");
+    sm[0] = 0;
+    sm[1] = 0;
+
+    if (pipe(fds_in) || pipe(fds_out)) {
+	syslog(LOG_ERR, "IOERROR: creating pipes: %m");
 	fatal("couldn't start pipe()", EC_OSERR);
     }
+
+    /* put us in non-blocking mode; this should allow the sendmail process
+     * to write on stdout/stderr without blocking - getting an error instead.
+     * This should also prevent any deadlock due to pipe buffer sizes between
+     * us writing the message and sendmail writing back upon issue.
+     */
+    fdflags = fcntl(fds_out[1], F_GETFD, 0);
+    if (fdflags != -1) {
+	fdflags = fcntl(fds_out[1], F_SETFL, O_NONBLOCK | fdflags);
+    }
+    if (fdflags == -1) {
+	syslog(LOG_ERR, "IOERROR: setting non-blocking mode for sendmail pipe: %m");
+    }
+
     if ((p = fork()) == 0) {
 	/* i'm the child! run sendmail! */
-	close(fds[1]);
-	/* make the pipe be stdin */
-	dup2(fds[0], 0);
+	close(fds_in[1]);
+	close(fds_out[0]);
+	/* make the pipes be stdin/stdout/stderr */
+	dup2(fds_in[0], 0);
+	dup2(fds_out[1], 1);
+	dup2(fds_out[1], 2);
 	execv(config_getstring(IMAPOPT_SENDMAIL), (char **) argv);
 
 	/* if we're here we suck */
-	printf("451 lmtpd: didn't exec() sendmail?!?\r\n");
+
+	/* use printf so that message appears in Sendmail failure log */
+	printf("exec() sendmail failed: %m\n");
 	exit(EXIT_FAILURE);
     }
 
     if (p < 0) {
 	/* failure */
-	*sm = NULL;
+	close(fds_in[0]);
+	close(fds_in[1]);
+	close(fds_out[0]);
+	close(fds_out[1]);
 	return p;
     }
 
     /* parent */
-    close(fds[0]);
-    ret = fdopen(fds[1], "w");
-    *sm = ret;
+    close(fds_in[0]);
+    close(fds_out[1]);
+    if ((sm[0] = fdopen(fds_in[1], "w")) != NULL) {
+	sm[1] = fdopen(fds_out[0], "r");
+    }
+    else {
+	close(fds_in[0]);
+	close(fds_out[1]);
+    }
 
     return p;
+}
+
+void close_sendmail(pid_t sm_pid, FILE *sm[2], int *sm_stat)
+{
+    struct buf output = BUF_INITIALIZER;
+
+    fclose(sm[0]);
+
+    if (sm[1]) {
+	/* read some output from child if any, will be used upon failure */
+	char buffer[256];
+	size_t count;
+	size_t actual;
+
+	/* 1KiB should be enough to assess the situation */
+	for (;;) {
+	    count = 1024 - buf_len(&output);
+	    if (count == 0) {
+		break;
+	    }
+	    else if (count > sizeof(buffer)) {
+		count = sizeof(buffer);
+	    }
+
+	    actual = fread(buffer, 1, count, sm[1]);
+	    if (actual <= 0) {
+		break;
+	    }
+
+	    buf_appendmap(&output, buffer, actual);
+	}
+
+	fclose(sm[1]);
+    }
+
+    sm[0] = 0;
+    sm[1] = 0;
+
+    while (waitpid(sm_pid, sm_stat, 0) < 0);
+
+    if (sm_stat) {
+	/* something went wrong, log output if any */
+	if (buf_len(&output)) {
+	    syslog(LOG_ERR, "Sendmail process failed with output: (%zu bytes) %s",
+		buf_len(&output), buf_cstring(&output));
+	}
+	else {
+	    syslog(LOG_ERR, "Sendmail process failed with no output");
+	}
+    }
 }
 
 /* sendmail_errstr.  create a descriptive message given 'sm_stat': 

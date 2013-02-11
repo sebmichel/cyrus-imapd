@@ -45,7 +45,8 @@
 #ifndef INCLUDED_SMTPCLIENT_H
 #define INCLUDED_SMTPCLIENT_H
 
-pid_t open_sendmail(const char *argv[], FILE **sm);
+pid_t open_sendmail(const char *argv[], FILE *sm[2]);
+void close_sendmail(pid_t sm_pid, FILE *sm[2], int *sm_stat);
 char *sendmail_errstr(int sm_stat);
 
 #endif
