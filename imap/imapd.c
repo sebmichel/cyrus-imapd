@@ -176,6 +176,10 @@ static void *imapd_tls_comp = NULL; /* TLS compression method, if any */
 static int imapd_compress_done = 0; /* have we done a successful compress? */
 static const char *plaintextloginalert = NULL;
 
+static int did_id = 0;
+static int failed_id = 0;
+static int logged_id = 0;
+
 #ifdef HAVE_SSL
 /* our tls connection, if any */
 static SSL *tls_conn = NULL;
@@ -782,6 +786,10 @@ static void imapd_reset(void)
     imapd_tls_comp = NULL;
     imapd_starttls_done = 0;
     plaintextloginalert = NULL;
+
+    did_id = 0;
+    failed_id = 0;
+    logged_id = 0;
 
     if(saslprops.iplocalport) {
 	free(saslprops.iplocalport);
@@ -2678,9 +2686,6 @@ static void cmd_noop(char *tag, char *cmd)
  */
 static void cmd_id(char *tag)
 {
-    static int did_id = 0;
-    static int failed_id = 0;
-    static int logged_id = 0;
     int error = 0;
     int c = EOF, npair = 0;
     static struct buf arg, field;
