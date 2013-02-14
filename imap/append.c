@@ -49,6 +49,7 @@
 #endif
 #include <stdio.h>
 #include <ctype.h>
+#include <errno.h>
 #include <utime.h>
 #include <string.h>
 #include <sys/types.h>
@@ -339,7 +340,7 @@ EXPORTED FILE *append_newstage(const char *mailboxname, time_t internaldate,
     /* create this file and put it into stage->parts[0] */
     unlink(stagefile);
     f = fopen(stagefile, "w+");
-    if (!f) {
+    if (!f && (errno != ENFILE) && (errno != EMFILE)) {
 	if (mkdir(stagedir, 0755) != 0) {
 	    syslog(LOG_ERR, "couldn't create stage directory: %s: %m",
 		   stagedir);
@@ -947,6 +948,10 @@ EXPORTED int append_fromstage(struct appendstate *as, struct body **body,
 
     r = mailbox_copyfile(stagefile, fname, nolink);
     destfile = fopen(fname, "r");
+    if (!destfile) {
+	syslog(LOG_ERR, "IOERROR: opening message file %s: %m", fname);
+	r = IMAP_IOERROR;
+    }
     if (!r && destfile) {
 	/* ok, we've successfully created the file */
 	if (!*body || (as->nummsg - 1))

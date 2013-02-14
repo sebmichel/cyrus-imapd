@@ -1256,6 +1256,9 @@ FILE *spoolfile(message_data_t *msgdata)
 	if (!r && !mbentry->server) {
 	    /* local mailbox -- setup stage for later use by deliver() */
 	    f = append_newstage(namebuf, now, 0, &stage);
+	    if (!f) {
+		return NULL;
+	    }
 	}
 
 	mboxlist_entry_free(&mbentry);
