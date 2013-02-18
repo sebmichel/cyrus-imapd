@@ -70,9 +70,11 @@ typedef int (*cmpmap_t)(const char *s1, int l1, const char *s2, int l2);
 typedef struct sql_engine {
     const char *name;
     const char *binary_type;
+    const char *collation_name;
     void *(*sql_open)(char *host, char *port, int usessl,
 		      const char *user, const char *password,
 		      const char *database);
+    int (*sql_create_collation)(void *conn, const char *name, cmpmap_t compar);
     char *(*sql_escape)(void *conn, char **to,
 			const char *from, size_t fromlen);
     int (*sql_begin_txn)(void *conn);
@@ -544,6 +546,12 @@ static void _pgsql_close(void *conn)
 #ifdef HAVE_SQLITE
 #include <sqlite3.h>
 
+static int _sqlite_collate_callback(cmpmap_t compar, int l1, const char *s1,
+    int l2, const char *s2)
+{
+    return compar(s1, l1, s2, l2);
+}
+
 static void *_sqlite_open(char *host __attribute__((unused)),
 			  char *port __attribute__((unused)),
 			  int usessl __attribute__((unused)),
@@ -558,9 +566,28 @@ static void *_sqlite_open(char *host __attribute__((unused)),
     if (rc != SQLITE_OK) {
 	syslog(LOG_ERR, "DBERROR: SQL backend: %s", sqlite3_errmsg(db));
 	sqlite3_close(db);
+	db = NULL;
     }
 
     return db;
+}
+
+static int _sqlite_create_collation(void *conn,
+    const char *name, cmpmap_t compar)
+{
+    int rc;
+
+    /* Create a collation for our sorting order */
+    rc = sqlite3_create_collation(conn, name, SQLITE_UTF8, compar,
+	(int(*)(void*,int,const void*,int,const void*))_sqlite_collate_callback);
+
+    if (rc != SQLITE_OK) {
+	syslog(LOG_ERR, "DBERROR: SQL collation create failed: %s",
+	    sqlite3_errmsg(conn));
+	rc = 1;
+    }
+
+    return rc;
 }
 
 static char *_sqlite_escape(void *conn __attribute__((unused)),
@@ -641,17 +668,20 @@ static void _sqlite_close(void *conn)
 
 static const sql_engine_t sql_engines[] = {
 #ifdef HAVE_MYSQL
-    { "mysql", "BLOB", &_mysql_open, &_mysql_escape,
+    { "mysql", "BLOB", NULL,
+      &_mysql_open, NULL, &_mysql_escape,
       &_mysql_begin_txn, &_mysql_commit_txn, &_mysql_rollback_txn,
       &_mysql_exec, &_mysql_close },
 #endif /* HAVE_MYSQL */
 #ifdef HAVE_PGSQL
-    { "pgsql", "BYTEA", &_pgsql_open, &_pgsql_escape,
+    { "pgsql", "BYTEA", NULL,
+      &_pgsql_open, NULL, &_pgsql_escape,
       &_pgsql_begin_txn, &_pgsql_commit_txn, &_pgsql_rollback_txn,
       &_pgsql_exec, &_pgsql_close },
 #endif
 #ifdef HAVE_SQLITE
-    { "sqlite", "BLOB", &_sqlite_open, &_sqlite_escape,
+    { "sqlite", "BLOB", "cyrus_mbox",
+      &_sqlite_open, &_sqlite_create_collation, &_sqlite_escape,
       &_sqlite_begin_txn, &_sqlite_commit_txn, &_sqlite_rollback_txn,
       &_sqlite_exec, &_sqlite_close },
 #endif
@@ -706,6 +736,10 @@ static int myopen(const char *fname, int flags, struct dbengine **ret)
     int usessl;
     void *conn = NULL;
     char *p, *table, cmd[1024];
+    /* SQL databases have all sorts of evil collations - we can't
+     * make any assumptions though, so just assume raw by default */
+    cmpmap_t compar = (flags & CYRUSDB_MBOXSORT) ? bsearch_ncompare_mbox
+						 : bsearch_ncompare_raw;
 
     assert(fname);
     assert(ret);
@@ -735,25 +769,33 @@ static int myopen(const char *fname, int flags, struct dbengine **ret)
 	    /* loop till we find some text */
 	    while (!Uisalnum(host[0])) host++;
 	}
-	
+
 	syslog(LOG_DEBUG,
 	       "SQL backend trying to open db '%s' on host '%s'%s",
 	       database, cur_host, usessl ? " using SSL" : "");
-	
+
 	/* set the optional port */
 	if ((cur_port = strchr(cur_host, ':'))) *cur_port++ = '\0';
-	
+
 	conn = dbengine->sql_open(cur_host, cur_port, usessl,
 				  user, passwd, database);
 	if (conn) break;
-	
+
 	syslog(LOG_WARNING,
 	       "DBERROR: SQL backend could not connect to host %s", cur_host);
-	
+
 	cur_host = host;
     }
 
     if (host_ptr) free(host_ptr);
+
+    if (conn && (flags & CYRUSDB_MBOXSORT) && dbengine->collation_name &&
+	dbengine->sql_create_collation &&
+	dbengine->sql_create_collation(conn, dbengine->collation_name, compar))
+    {
+	dbengine->sql_close(conn);
+	conn = NULL;
+    }
 
     if (!conn) {
 	syslog(LOG_ERR, "DBERROR: could not open SQL database '%s'", database);
@@ -775,9 +817,21 @@ static int myopen(const char *fname, int flags, struct dbengine **ret)
     if (dbengine->sql_exec(conn, cmd, NULL, NULL, NULL)) {
 	if (flags & CYRUSDB_CREATE) {
 	    /* create the table */
-	    snprintf(cmd, sizeof(cmd),
+	    if ((flags & CYRUSDB_MBOXSORT) && dbengine->collation_name) {
+		/* In case it matters, declare the default collation. Even if
+		 * database was not created with it, we are still able to sort
+		 * with COLLATE upon FETCH.
+		 */
+		snprintf(cmd, sizeof(cmd),
+		     "CREATE TABLE %s (dbkey %s NOT NULL COLLATE %s, data %s);",
+		     table, dbengine->binary_type, dbengine->collation_name,
+		     dbengine->binary_type);
+	    }
+	    else {
+		snprintf(cmd, sizeof(cmd),
 		     "CREATE TABLE %s (dbkey %s NOT NULL, data %s);",
 		     table, dbengine->binary_type, dbengine->binary_type);
+	    }
 	    if (dbengine->sql_exec(conn, cmd, NULL, NULL, NULL)) {
 		syslog(LOG_ERR, "DBERROR: SQL failed: %s", cmd);
 		dbengine->sql_close(conn);
@@ -792,11 +846,8 @@ static int myopen(const char *fname, int flags, struct dbengine **ret)
     *ret = (struct dbengine *) xzmalloc(sizeof(struct dbengine));
     (*ret)->conn = conn;
     (*ret)->table = table;
-    /* SQL databases have all sorts of evil collations - we can't
-     * make any assumptions though, so just assume raw by default */
     (*ret)->open_flags = flags & ~CYRUSDB_CREATE;
-    (*ret)->compar = (flags & CYRUSDB_MBOXSORT) ? bsearch_ncompare_mbox
-						: bsearch_ncompare_raw;
+    (*ret)->compar = compar;
 
     return 0;
 }
@@ -942,9 +993,16 @@ static int foreach(struct dbengine *db,
     if (prefixlen) /* XXX hack for SQLite */
 	esc_key = dbengine->sql_escape(db->conn, &db->esc_key,
 				       prefix, prefixlen);
-    snprintf(cmd, sizeof(cmd),
+    if ((db->open_flags & CYRUSDB_MBOXSORT) && dbengine->collation_name) {
+	snprintf(cmd, sizeof(cmd),
+	     "SELECT * FROM %s WHERE dbkey LIKE '%s%%' ORDER BY dbkey COLLATE %s;",
+	     db->table, esc_key ? esc_key : "", dbengine->collation_name);
+    }
+    else {
+	snprintf(cmd, sizeof(cmd),
 	     "SELECT * FROM %s WHERE dbkey LIKE '%s%%' ORDER BY dbkey;",
 	     db->table, esc_key ? esc_key : "");
+    }
     if (esc_key && (esc_key != db->esc_key)) free(esc_key);
     r = dbengine->sql_exec(db->conn, cmd,
 	(db->open_flags & CYRUSDB_MBOXSORT) ? db->compar : NULL,
