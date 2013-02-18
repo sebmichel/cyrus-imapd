@@ -100,6 +100,14 @@ struct txn {
     size_t keylen;
 };
 
+struct select_rock {
+    int found;
+    struct txn *tid;
+    foreach_cb *goodp;
+    foreach_cb *cb;
+    void *rock;
+};
+
 static int dbinit = 0;
 static const sql_engine_t *dbengine = NULL;
 
@@ -333,12 +341,143 @@ static char *_pgsql_escape(void *conn __attribute__((unused)),
     return (char *) PQescapeBytea((unsigned char *) from, fromlen, &tolen);
 }
 
+static result_data_t *_pgsql_result_data_new(PGresult *result, int idx)
+{
+    size_t keylen, datalen;
+    result_data_t *rdata = (result_data_t *)xmalloc(sizeof(result_data_t));
+
+    rdata->key = (char *)
+	PQunescapeBytea((unsigned char *) PQgetvalue(result, idx, 0),
+			&keylen);
+    rdata->keylen = keylen;
+    rdata->data = (char *)
+	PQunescapeBytea((unsigned char *) PQgetvalue(result, idx, 1),
+			&datalen);
+    rdata->datalen = datalen;
+
+    return rdata;
+}
+
+static int _pgsql_exec_cursor(void *conn, const char *cmd, cmpmap_t compar,
+    exec_cb *cb, void *rock)
+{
+    struct buf cmdbuf = BUF_INITIALIZER;
+    int transaction_end = 0;
+    int cursor_close = 0;
+    PGresult *result = NULL;
+    int row_count, i, r = 0;
+    ExecStatusType status;
+    struct select_rock *srock = (struct select_rock *)rock;
+    datalist_t *results = NULL;
+    result_data_t *rdata;
+
+    syslog(LOG_DEBUG, "executing SQL cmd with CURSOR: %s", cmd);
+
+    if (!srock->tid) {
+	/* cursors are only available in transactions */
+	result = PQexec(conn, "BEGIN;");
+	status = PQresultStatus(result);
+	if (status != PGRES_COMMAND_OK) {
+	    syslog(LOG_ERR, "DBERROR: SQL transaction failed: %s",
+		PQresStatus(status));
+	    r = CYRUSDB_INTERNAL;
+	    goto END;
+	}
+	PQclear(result);
+	transaction_end = 1;
+    }
+
+    /* declare the cursor for our query */
+    buf_printf(&cmdbuf, "DECLARE cyruscursor CURSOR FOR %s", cmd);
+    result = PQexec(conn, buf_cstring(&cmdbuf));
+    status = PQresultStatus(result);
+    if (status != PGRES_COMMAND_OK) {
+	syslog(LOG_ERR, "DBERROR: SQL cursor declare failed: %s",
+	    PQresStatus(status));
+	r = CYRUSDB_INTERNAL;
+	goto END;
+    }
+    PQclear(result);
+    cursor_close = 1;
+
+    results = datalist_new((datafree_t)result_data_free,
+	(datacomp_t)result_data_compare);
+
+    for (;;) {
+	result = PQexec(conn, "FETCH FROM cyruscursor;");
+	status = PQresultStatus(result);
+	if (status != PGRES_TUPLES_OK) {
+	    syslog(LOG_ERR, "DBERROR: SQL cursor fetch failed: %s",
+		PQresStatus(status));
+	    r = CYRUSDB_INTERNAL;
+	    goto END;
+	}
+
+	row_count = PQntuples(result);
+	if (!row_count) {
+	    /* No more result */
+	    break;
+	}
+	for (i = 0; i < row_count; i++) {
+	    datalist_append(results, _pgsql_result_data_new(result, i));
+	}
+    }
+
+    /* free resources now (callback may do other queries) */
+    PQclear(result);
+    result = PQexec(conn, "CLOSE cyruscursor;");
+    PQclear(result);
+    cursor_close = 0;
+    if (transaction_end) {
+	result = PQexec(conn, "END;");
+	PQclear(result);
+	transaction_end = 0;
+    }
+    result = NULL;
+
+    /* process the results */
+    datalist_sort(results, compar);
+
+    while (!r && (rdata = datalist_shift(results))) {
+	r = cb(rock, rdata->key, rdata->keylen,
+	    rdata->data, rdata->datalen);
+    }
+
+  END:
+    /* free result */
+    if (results) {
+	datalist_free(results);
+    }
+    if (result) {
+	PQclear(result);
+    }
+
+    /* close cursor */
+    if (cursor_close) {
+	result = PQexec(conn, "CLOSE cyruscursor;");
+	PQclear(result);
+    }
+    /* end the transaction */
+    if (transaction_end) {
+	result = PQexec(conn, "END;");
+	PQclear(result);
+    }
+
+    buf_free(&cmdbuf);
+
+    return r;
+}
+
 static int _pgsql_exec(void *conn, const char *cmd, cmpmap_t compar,
     exec_cb *cb, void *rock)
 {
     PGresult *result;
     int row_count, i, r = 0;
     ExecStatusType status;
+
+    if (compar) {
+	return _pgsql_exec_cursor(conn, cmd, compar, cb, rock);
+    }
 
     syslog(LOG_DEBUG, "executing SQL cmd: %s", cmd);
 
@@ -686,14 +825,6 @@ static struct txn *start_txn(struct dbengine *db)
     }
     return xzmalloc(sizeof(struct txn));
 }
-
-struct select_rock {
-    int found;
-    struct txn *tid;
-    foreach_cb *goodp;
-    foreach_cb *cb;
-    void *rock;
-};
 
 static int select_cb(void *rock,
 		     const char *key, size_t keylen,
