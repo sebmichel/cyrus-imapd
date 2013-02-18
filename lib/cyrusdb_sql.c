@@ -52,8 +52,10 @@
 
 #include "bsearch.h"
 #include "cyrusdb.h"
+#include "datalist.h"
 #include "exitcodes.h"
 #include "libcyr_cfg.h"
+#include "lsort.h"
 #include "xmalloc.h"
 #include "util.h"
 
@@ -62,6 +64,8 @@ extern void fatal(const char *, int);
 typedef int exec_cb(void *rock,
 		    const char *key, size_t keylen,
 		    const char *data, size_t datalen);
+
+typedef int (*cmpmap_t)(const char *s1, int l1, const char *s2, int l2);
 
 typedef struct sql_engine {
     const char *name;
@@ -74,7 +78,8 @@ typedef struct sql_engine {
     int (*sql_begin_txn)(void *conn);
     int (*sql_commit_txn)(void *conn);
     int (*sql_rollback_txn)(void *conn);
-    int (*sql_exec)(void *conn, const char *cmd, exec_cb *cb, void *rock);
+    int (*sql_exec)(void *conn, const char *cmd, cmpmap_t compar,
+		    exec_cb *cb, void *rock);
     void (*sql_close)(void *conn);
 } sql_engine_t;
 
@@ -84,6 +89,10 @@ struct dbengine {
     char *esc_key;  /* allocated buffer for escaped key */
     char *esc_data; /* allocated buffer for escaped data */
     char *data;     /* allocated buffer for fetched data */
+
+    /* comparator function to use for sorting */
+    int open_flags;
+    cmpmap_t compar;
 };
 
 struct txn {
@@ -93,6 +102,27 @@ struct txn {
 
 static int dbinit = 0;
 static const sql_engine_t *dbengine = NULL;
+
+
+/** Result data. */
+typedef struct result_data {
+    char *key;
+    int keylen;
+    char *data;
+    int datalen;
+} result_data_t;
+
+static void result_data_free(result_data_t *rdata)
+{
+    if (rdata->key) free(rdata->key);
+    if (rdata->data) free(rdata->data);
+}
+
+static int result_data_compare(result_data_t *rdata1, result_data_t *rdata2,
+    cmpmap_t compar)
+{
+    return compar(rdata1->key, rdata1->keylen, rdata2->key, rdata2->keylen);
+}
 
 
 #ifdef HAVE_MYSQL
@@ -117,16 +147,28 @@ static void *_mysql_open(char *host, char *port, int usessl,
 static char *_mysql_escape(void *conn, char **to,
 			   const char *from, size_t fromlen)
 {
-    size_t tolen;
-
     *to = xrealloc(*to, 2 * fromlen + 1); /* +1 for NUL */
 
-    tolen = mysql_real_escape_string(conn, *to, from, fromlen);
+    mysql_real_escape_string(conn, *to, from, fromlen);
 
     return *to;
 }
 
-static int _mysql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
+static result_data_t *_mysql_result_data_new(MYSQL_ROW row,
+    unsigned long *length)
+{
+    result_data_t *rdata = (result_data_t *)xmalloc(sizeof(result_data_t));
+
+    rdata->keylen = length[0];
+    rdata->key = row[0] ? (char *)xmemdup(row[0], rdata->keylen) : NULL;
+    rdata->datalen = length[1];
+    rdata->data = row[1] ? (char *)xmemdup(row[1], rdata->datalen) : NULL;
+
+    return rdata;
+}
+
+static int _mysql_exec(void *conn, const char *cmd, cmpmap_t compar,
+    exec_cb *cb, void *rock)
 {
     MYSQL_RES *result;
     MYSQL_ROW row;
@@ -152,18 +194,63 @@ static int _mysql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
 	return 0;
     }
 
-    /* get the results */
-    result = mysql_store_result(conn);
-    
-    /* process the results */
-    while (!r && (row = mysql_fetch_row(result))) {
-	unsigned long *length = mysql_fetch_lengths(result);
-	r = cb(rock, row[0], length[0], row[1], length[1]);
+    if (compar) {
+	/* we need to pre-order the results */
+	datalist_t *results;
+
+	/* get the results; since we need to order them, get them one at a time
+	 * in our list */
+	result = mysql_use_result(conn);
+	if (!result) {
+	    syslog(LOG_ERR, "DBERROR: SQL query failed: %s",
+		mysql_error(conn));
+	    return CYRUSDB_INTERNAL;
+	}
+
+	results = datalist_new((datafree_t)result_data_free,
+	    (datacomp_t)result_data_compare);
+	while ((row = mysql_fetch_row(result)) != NULL) {
+	    datalist_append(results,
+		_mysql_result_data_new(row, mysql_fetch_lengths(result)));
+	}
+	if (*mysql_error(conn)) {
+	    syslog(LOG_ERR, "DBERROR: SQL fetch failed: %s",
+		mysql_error(conn));
+	    r = CYRUSDB_INTERNAL;
+	}
+	else {
+	    /* process the results */
+	    result_data_t *rdata;
+
+	    datalist_sort(results, compar);
+
+	    while (!r && (rdata = datalist_shift(results))) {
+		r = cb(rock, rdata->key, rdata->keylen,
+		    rdata->data, rdata->datalen);
+	    }
+	}
+
+	datalist_free(results);
+    }
+    else {
+	/* get the results */
+	result = mysql_store_result(conn);
+	if (!result) {
+	    syslog(LOG_ERR, "DBERROR: SQL query failed: %s",
+		mysql_error(conn));
+	    return CYRUSDB_INTERNAL;
+	}
+
+	/* process the results */
+	while (!r && (row = mysql_fetch_row(result))) {
+	    unsigned long *length = mysql_fetch_lengths(result);
+	    r = cb(rock, row[0], length[0], row[1], length[1]);
+	}
     }
 
     /* free result */
     mysql_free_result(result);
-    
+
     return r;
 }
 
@@ -175,17 +262,17 @@ static int _mysql_begin_txn(void *conn)
 #else
 		       "BEGIN",
 #endif
-		       NULL, NULL);
+		       NULL, NULL, NULL);
 }
 
 static int _mysql_commit_txn(void *conn)
 {
-    return _mysql_exec(conn, "COMMIT", NULL, NULL);
+    return _mysql_exec(conn, "COMMIT", NULL, NULL, NULL);
 }
 
 static int _mysql_rollback_txn(void *conn)
 {
-    return _mysql_exec(conn, "ROLLBACK", NULL, NULL);
+    return _mysql_exec(conn, "ROLLBACK", NULL, NULL, NULL);
 }
 
 static void _mysql_close(void *conn)
@@ -246,7 +333,8 @@ static char *_pgsql_escape(void *conn __attribute__((unused)),
     return (char *) PQescapeBytea((unsigned char *) from, fromlen, &tolen);
 }
 
-static int _pgsql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
+static int _pgsql_exec(void *conn, const char *cmd, cmpmap_t compar,
+    exec_cb *cb, void *rock)
 {
     PGresult *result;
     int row_count, i, r = 0;
@@ -294,17 +382,17 @@ static int _pgsql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
 
 static int _pgsql_begin_txn(void *conn)
 {
-    return _pgsql_exec(conn, "BEGIN;", NULL, NULL);
+    return _pgsql_exec(conn, "BEGIN;", NULL, NULL, NULL);
 }
 
 static int _pgsql_commit_txn(void *conn)
 {
-    return _pgsql_exec(conn, "COMMIT;", NULL, NULL);
+    return _pgsql_exec(conn, "COMMIT;", NULL, NULL, NULL);
 }
 
 static int _pgsql_rollback_txn(void *conn)
 {
-    return _pgsql_exec(conn, "ROLLBACK;", NULL, NULL);
+    return _pgsql_exec(conn, "ROLLBACK;", NULL, NULL, NULL);
 }
 
 static void _pgsql_close(void *conn)
@@ -354,7 +442,8 @@ static char *_sqlite_escape(void *conn __attribute__((unused)),
     return *to;
 }
 
-static int _sqlite_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
+static int _sqlite_exec(void *conn, const char *cmd, cmpmap_t compar,
+    exec_cb *cb, void *rock)
 {
     int rc, r = 0;
     sqlite3_stmt *stmt = NULL;
@@ -391,17 +480,17 @@ static int _sqlite_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
 
 static int _sqlite_begin_txn(void *conn)
 {
-    return _sqlite_exec(conn, "BEGIN TRANSACTION", NULL, NULL);
+    return _sqlite_exec(conn, "BEGIN TRANSACTION", NULL, NULL, NULL);
 }
 
 static int _sqlite_commit_txn(void *conn)
 {
-    return _sqlite_exec(conn, "COMMIT TRANSACTION", NULL, NULL);
+    return _sqlite_exec(conn, "COMMIT TRANSACTION", NULL, NULL, NULL);
 }
 
 static int _sqlite_rollback_txn(void *conn)
 {
-    return _sqlite_exec(conn, "ROLLBACK TRANSACTION", NULL, NULL);
+    return _sqlite_exec(conn, "ROLLBACK TRANSACTION", NULL, NULL, NULL);
 }
 
 static void _sqlite_close(void *conn)
@@ -544,13 +633,13 @@ static int myopen(const char *fname, int flags, struct dbengine **ret)
     /* check if the table exists */
     /* XXX is this the best way to do this? */
     snprintf(cmd, sizeof(cmd), "SELECT * FROM %s LIMIT 0;", table);
-    if (dbengine->sql_exec(conn, cmd, NULL, NULL)) {
+    if (dbengine->sql_exec(conn, cmd, NULL, NULL, NULL)) {
 	if (flags & CYRUSDB_CREATE) {
 	    /* create the table */
 	    snprintf(cmd, sizeof(cmd),
 		     "CREATE TABLE %s (dbkey %s NOT NULL, data %s);",
 		     table, dbengine->binary_type, dbengine->binary_type);
-	    if (dbengine->sql_exec(conn, cmd, NULL, NULL)) {
+	    if (dbengine->sql_exec(conn, cmd, NULL, NULL, NULL)) {
 		syslog(LOG_ERR, "DBERROR: SQL failed: %s", cmd);
 		dbengine->sql_close(conn);
 		return CYRUSDB_INTERNAL;
@@ -564,6 +653,11 @@ static int myopen(const char *fname, int flags, struct dbengine **ret)
     *ret = (struct dbengine *) xzmalloc(sizeof(struct dbengine));
     (*ret)->conn = conn;
     (*ret)->table = table;
+    /* SQL databases have all sorts of evil collations - we can't
+     * make any assumptions though, so just assume raw by default */
+    (*ret)->open_flags = flags & ~CYRUSDB_CREATE;
+    (*ret)->compar = (flags & CYRUSDB_MBOXSORT) ? bsearch_ncompare_mbox
+						: bsearch_ncompare_raw;
 
     return 0;
 }
@@ -678,7 +772,7 @@ static int fetch(struct dbengine *db,
     snprintf(cmd, sizeof(cmd),
 	     "SELECT * FROM %s WHERE dbkey = '%s';", db->table, esc_key);
     if (esc_key != db->esc_key) free(esc_key);
-    r = dbengine->sql_exec(db->conn, cmd, &select_cb, &srock);
+    r = dbengine->sql_exec(db->conn, cmd, NULL, &select_cb, &srock);
 
     if (r) {
 	syslog(LOG_ERR, "DBERROR: SQL failed %s", cmd);
@@ -721,7 +815,9 @@ static int foreach(struct dbengine *db,
 	     "SELECT * FROM %s WHERE dbkey LIKE '%s%%' ORDER BY dbkey;",
 	     db->table, esc_key ? esc_key : "");
     if (esc_key && (esc_key != db->esc_key)) free(esc_key);
-    r = dbengine->sql_exec(db->conn, cmd, &select_cb, &srock);
+    r = dbengine->sql_exec(db->conn, cmd,
+	(db->open_flags & CYRUSDB_MBOXSORT) ? db->compar : NULL,
+	&select_cb, &srock);
 
     if (r) {
 	syslog(LOG_ERR, "DBERROR: SQL failed %s", cmd);
@@ -759,7 +855,7 @@ static int mystore(struct dbengine *db,
 	/* DELETE the entry */
 	snprintf(cmd, sizeof(cmd), "DELETE FROM %s WHERE dbkey = '%s';",
 		 db->table, esc_key);
-	r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
+	r = dbengine->sql_exec(db->conn, cmd, NULL, NULL, NULL);
 
 	/* see if we just removed the previously SELECTed key */
 	if (!r && tid && *tid &&
@@ -790,7 +886,7 @@ static int mystore(struct dbengine *db,
 	    snprintf(cmd, sizeof(cmd),
 		     "SELECT * FROM %s WHERE dbkey = '%s';",
 		     db->table, esc_key);
-	    r = dbengine->sql_exec(db->conn, cmd, &select_cb, &srock);
+	    r = dbengine->sql_exec(db->conn, cmd, NULL, &select_cb, &srock);
 	}
 
 	if (!r && srock.found) {
@@ -799,7 +895,7 @@ static int mystore(struct dbengine *db,
 		snprintf(cmd, sizeof(cmd),
 			 "UPDATE %s SET data = '%s' WHERE dbkey = '%s';",
 			 db->table, esc_data, esc_key);
-		r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
+		r = dbengine->sql_exec(db->conn, cmd, NULL, NULL, NULL);
 	    }
 	    else {
 		if (tid) dbengine->sql_rollback_txn(db->conn);
@@ -811,7 +907,7 @@ static int mystore(struct dbengine *db,
 	    snprintf(cmd, sizeof(cmd),
 		     "INSERT INTO %s VALUES ('%s', '%s');",
 		     db->table, esc_key, esc_data);
-	    r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
+	    r = dbengine->sql_exec(db->conn, cmd, NULL, NULL, NULL);
 	}
 
 	if (free_esc_data) free(esc_data);
@@ -887,12 +983,10 @@ static int abort_txn(struct dbengine *db, struct txn *tid)
     return finish_txn(db, tid, 0);
 }
 
-/* SQL databases have all sorts of evil collations - we can't
- * make any assumptions though, so just assume raw */
 static int mycompar(struct dbengine *db, const char *a, int alen,
 		    const char *b, int blen)
 {
-    return bsearch_ncompare_raw(a, alen, b, blen);
+    return db->compar(a, alen, b, blen);
 }
 
 HIDDEN struct cyrusdb_backend cyrusdb_sql =

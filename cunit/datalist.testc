@@ -1,0 +1,598 @@
+#include "cunit/cunit.h"
+#include "xmalloc.h"
+#include "datalist.h"
+
+#define PTR0	    ((void *)0xcafebabe)
+#define PTR1	    ((void *)0xcafebabf)
+#define PTR2	    ((void *)0xcafebac0)
+#define PTR3	    ((void *)0xcafebac1)
+#define PTR4	    ((void *)0xcafebac2)
+
+#define PTRNOTHERE  ((void *)0xdefaced0)
+
+/* Dummy pointer comparators. */
+static int ptr_comp1(void *p1, void *p2, const void *rock)
+{
+    int mul = (rock && *((int *)rock)) ? -1 : 1;
+
+    return ((p1 < p2) ? mul * -1 : (p1 > p2) ? mul * 1 : 0);
+}
+
+static int ptr_comp2(void *p1, void *p2, const void *rock)
+{
+    int res = ptr_comp1(p1, p2, NULL);
+
+    if (!res && rock) {
+	*((int *)rock) = 1;
+    }
+
+    return res;
+}
+
+/* Dummy data freeing callback. */
+static int freed = 0;
+
+static void ptr_free(void *p)
+{
+    freed++;
+}
+
+static void test_fini_null(void)
+{
+    /* _fini(NULL) is harmless */
+    datalist_fini(NULL);
+    /* _free(NULL) is harmless */
+    datalist_free(NULL);
+}
+
+static void test_auto(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+    void *p1;
+    void *p2;
+
+    CU_ASSERT_EQUAL(dl.count, 0);
+    CU_ASSERT_PTR_NULL(datalist_head(&dl));
+    CU_ASSERT_PTR_NULL(datalist_tail(&dl));
+
+    p1 = PTR0;
+    datalist_append(&dl, p1);
+    CU_ASSERT_EQUAL(dl.count, 1);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), p1);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), p1);
+
+    p2 = PTR0;
+    datalist_append(&dl, p2);
+    CU_ASSERT_EQUAL(dl.count, 2);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), p1);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), p2);
+
+    datalist_fini(&dl);
+    CU_ASSERT_EQUAL(dl.count, 0);
+    CU_ASSERT_PTR_NULL(dl.head);
+    CU_ASSERT_PTR_NULL(dl.tail);
+}
+
+static void test_heap(void)
+{
+    datalist_t *dl = datalist_new(NULL, NULL);
+    void *p1;
+    void *p2;
+
+    CU_ASSERT_EQUAL(dl->count, 0);
+    CU_ASSERT_PTR_NULL(datalist_head(dl));
+    CU_ASSERT_PTR_NULL(datalist_tail(dl));
+
+    p1 = PTR0;
+    datalist_append(dl, p1);
+    CU_ASSERT_EQUAL(dl->count, 1);
+    CU_ASSERT_PTR_NOT_NULL(dl->head);
+    CU_ASSERT_PTR_NOT_NULL(dl->tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(dl)), p1);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(dl)), p1);
+
+    p2 = PTR0;
+    datalist_append(dl, p2);
+    CU_ASSERT_EQUAL(dl->count, 2);
+    CU_ASSERT_PTR_NOT_NULL(dl->head);
+    CU_ASSERT_PTR_NOT_NULL(dl->tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(dl)), p1);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(dl)), p2);
+
+    datalist_free(dl);
+}
+
+static void test_append(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+    listnode_t *node;
+
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR1);
+    datalist_append(&dl, PTR2);
+    datalist_append(&dl, PTR3);
+    datalist_append(&dl, PTR4);
+    CU_ASSERT_EQUAL(dl.count, 5);
+
+    /* check from head to tail */
+    node = datalist_head(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    /* check from tail to head */
+    node = datalist_tail(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    datalist_fini(&dl);
+}
+
+static void test_add(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+
+    /* _add() on an empty array appends */
+    datalist_add(&dl, PTR0, NULL);
+    CU_ASSERT_EQUAL(dl.count, 1);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR0);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR0);
+
+    /* _add() of an item already present is a no-op */
+    datalist_add(&dl, PTR0, NULL);
+    CU_ASSERT_EQUAL(dl.count, 1);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR0);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR0);
+
+    /* _add() of an item not already present appends */
+    datalist_add(&dl, PTR1, NULL);
+    CU_ASSERT_EQUAL(dl.count, 2);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR0);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR1);
+
+    /* _add() of an item already present is a no-op */
+    datalist_add(&dl, PTR0, NULL);
+    CU_ASSERT_EQUAL(dl.count, 2);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR0);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR1);
+
+    datalist_add(&dl, PTR1, NULL);
+    CU_ASSERT_EQUAL(dl.count, 2);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR0);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR1);
+
+    datalist_fini(&dl);
+}
+
+static void test_prepend(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+    listnode_t *node;
+
+    datalist_prepend(&dl, PTR0);
+    datalist_prepend(&dl, PTR1);
+    datalist_prepend(&dl, PTR2);
+    datalist_prepend(&dl, PTR3);
+    datalist_prepend(&dl, PTR4);
+    CU_ASSERT_EQUAL(dl.count, 5);
+
+    /* check from head to tail */
+    node = datalist_head(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    /* check from tail to head */
+    node = datalist_tail(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    datalist_fini(&dl);
+}
+
+static void test_shift(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+    void *p;
+    listnode_t *node;
+
+    /* _shift is harmless on empty list */
+    p = datalist_shift(&dl);
+    CU_ASSERT_PTR_NULL(p);
+
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR1);
+    datalist_append(&dl, PTR2);
+    datalist_append(&dl, PTR3);
+    datalist_append(&dl, PTR4);
+    CU_ASSERT_EQUAL(dl.count, 5);
+
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR0);
+    p = datalist_shift(&dl);
+    CU_ASSERT_EQUAL(dl.count, 4);
+    CU_ASSERT_PTR_EQUAL(p, PTR0);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR1);
+    p = datalist_shift(&dl);
+    CU_ASSERT_EQUAL(dl.count, 3);
+    CU_ASSERT_PTR_EQUAL(p, PTR1);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR2);
+    p = datalist_shift(&dl);
+    CU_ASSERT_EQUAL(dl.count, 2);
+    CU_ASSERT_PTR_EQUAL(p, PTR2);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR3);
+    p = datalist_shift(&dl);
+    CU_ASSERT_EQUAL(dl.count, 1);
+    CU_ASSERT_PTR_EQUAL(p, PTR3);
+    CU_ASSERT_PTR_NOT_NULL(dl.head);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_head(&dl)), PTR4);
+    p = datalist_shift(&dl);
+    CU_ASSERT_EQUAL(dl.count, 0);
+    CU_ASSERT_PTR_NULL(dl.head);
+    CU_ASSERT_PTR_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(p, PTR4);
+    p = datalist_shift(&dl);
+    CU_ASSERT_PTR_NULL(p);
+
+    datalist_fini(&dl);
+}
+
+static void test_pop(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+    void *p;
+    listnode_t *node;
+
+    /* _pop is harmless on empty list */
+    p = datalist_pop(&dl);
+    CU_ASSERT_PTR_NULL(p);
+
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR1);
+    datalist_append(&dl, PTR2);
+    datalist_append(&dl, PTR3);
+    datalist_append(&dl, PTR4);
+    CU_ASSERT_EQUAL(dl.count, 5);
+
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR4);
+    p = datalist_pop(&dl);
+    CU_ASSERT_EQUAL(dl.count, 4);
+    CU_ASSERT_PTR_EQUAL(p, PTR4);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR3);
+    p = datalist_pop(&dl);
+    CU_ASSERT_EQUAL(dl.count, 3);
+    CU_ASSERT_PTR_EQUAL(p, PTR3);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR2);
+    p = datalist_pop(&dl);
+    CU_ASSERT_EQUAL(dl.count, 2);
+    CU_ASSERT_PTR_EQUAL(p, PTR2);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR1);
+    p = datalist_pop(&dl);
+    CU_ASSERT_EQUAL(dl.count, 1);
+    CU_ASSERT_PTR_EQUAL(p, PTR1);
+    CU_ASSERT_PTR_NOT_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(listnode_data(datalist_tail(&dl)), PTR0);
+    p = datalist_pop(&dl);
+    CU_ASSERT_EQUAL(dl.count, 0);
+    CU_ASSERT_PTR_NULL(dl.head);
+    CU_ASSERT_PTR_NULL(dl.tail);
+    CU_ASSERT_PTR_EQUAL(p, PTR0);
+    p = datalist_pop(&dl);
+    CU_ASSERT_PTR_NULL(p);
+
+    datalist_fini(&dl);
+}
+
+static void test_find(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+    int found = 0;
+    listnode_t *node;
+
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR1);
+    datalist_append(&dl, PTR2);
+    datalist_append(&dl, PTR3);
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR4);
+    CU_ASSERT_EQUAL(dl.count, 6);
+
+    /* search for something which isn't there */
+    node = datalist_find(&dl, PTRNOTHERE, NULL, NULL);
+    CU_ASSERT_PTR_NULL(node);
+
+    /* search for something which isn't there, starting off the end */
+    node = datalist_find(&dl, PTRNOTHERE, datalist_tail(&dl), NULL);
+    CU_ASSERT_PTR_NULL(node);
+
+    /* search for something which is there */
+    node = datalist_find(&dl, PTR1, NULL, NULL);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    CU_ASSERT_PTR_NOT_NULL(listnode_previous(node));
+    CU_ASSERT_PTR_EQUAL(listnode_data(listnode_previous(node)), PTR0);
+    CU_ASSERT_PTR_NOT_NULL(listnode_next(node));
+    CU_ASSERT_PTR_EQUAL(listnode_data(listnode_next(node)), PTR2);
+    node = datalist_find(&dl, PTR1, listnode_next(node), NULL);
+    CU_ASSERT_PTR_NULL(node);
+
+    /* search for something which is there, starting off the end */
+    node = datalist_find(&dl, PTR1, datalist_tail(&dl), NULL);
+    CU_ASSERT_PTR_NULL(node);
+
+    /* search for something which is there multiple times */
+    node = datalist_find(&dl, PTR0, NULL, NULL);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    CU_ASSERT_PTR_NULL(listnode_previous(node));
+    CU_ASSERT_PTR_NOT_NULL(listnode_next(node));
+    CU_ASSERT_PTR_EQUAL(listnode_data(listnode_next(node)), PTR1);
+    node = datalist_find(&dl, PTR0, listnode_next(node), NULL);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    CU_ASSERT_PTR_NOT_NULL(listnode_previous(node));
+    CU_ASSERT_PTR_EQUAL(listnode_data(listnode_previous(node)), PTR3);
+    CU_ASSERT_PTR_NOT_NULL(listnode_next(node));
+    CU_ASSERT_PTR_EQUAL(listnode_data(listnode_next(node)), PTR4);
+    node = datalist_find(&dl, PTR0, listnode_next(node), NULL);
+    CU_ASSERT_PTR_NULL(node);
+
+    /* Simple test to check rock is given to comparison callback */
+    dl.comp = (datacomp_t)ptr_comp2;
+    found = 0;
+    datalist_find(&dl, PTRNOTHERE, datalist_head(&dl), &found);
+    CU_ASSERT_EQUAL(found, 0);
+    datalist_find(&dl, PTR1, datalist_head(&dl), &found);
+    CU_ASSERT_EQUAL(found, 1);
+
+    datalist_fini(&dl);
+}
+
+static void test_sort(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+    int reverse = 0;
+    listnode_t *node;
+
+    dl.comp = (datacomp_t)ptr_comp1;
+
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR1);
+    datalist_append(&dl, PTR2);
+    datalist_append(&dl, PTR3);
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR4);
+    CU_ASSERT_EQUAL(dl.count, 6);
+
+    /* check from head to tail */
+    node = datalist_head(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    /* check from tail to head */
+    node = datalist_tail(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    reverse = 0;
+    datalist_sort(&dl, &reverse);
+
+    node = datalist_head(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    node = datalist_tail(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    reverse = 1;
+    datalist_sort(&dl, &reverse);
+
+    node = datalist_head(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_next(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    node = datalist_tail(&dl);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR0);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR1);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR2);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR3);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NOT_NULL(node);
+    CU_ASSERT_PTR_EQUAL(listnode_data(node), PTR4);
+    node = listnode_previous(node);
+    CU_ASSERT_PTR_NULL(node);
+
+    datalist_fini(&dl);
+}
+
+static void test_free(void)
+{
+    datalist_t dl = DATALIST_INITIALIZER;
+
+    dl.free = (datafree_t)ptr_free;
+
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR1);
+    datalist_append(&dl, PTR2);
+    datalist_append(&dl, PTR3);
+    datalist_append(&dl, PTR0);
+    datalist_append(&dl, PTR4);
+    CU_ASSERT_EQUAL(dl.count, 6);
+
+    freed = 0;
+    datalist_fini(&dl);
+    CU_ASSERT_EQUAL(freed, 6);
+}
+
+/* vim: set ft=c: */

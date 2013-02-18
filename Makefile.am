@@ -478,6 +478,7 @@ cunit_TESTS = \
 	cunit/byteorder64.testc \
 	cunit/charset.testc \
 	cunit/crc32.testc \
+	cunit/datalist.testc \
 	cunit/db.testc \
 	cunit/dlist.testc \
 	cunit/duplicate.testc \
@@ -559,6 +560,7 @@ include_HEADERS = \
 	lib/crc32.h \
 	lib/cyr_lock.h \
 	lib/cyrusdb.h \
+	lib/datalist.h \
 	lib/exitcodes.h \
 	lib/glob.h \
 	lib/gmtoff.h \
@@ -915,6 +917,7 @@ lib_libcyrus_la_SOURCES = \
 	lib/cyrusdb_quotalegacy.c \
 	lib/cyrusdb_skiplist.c \
 	lib/cyrusdb_twoskip.c \
+	lib/datalist.c \
 	lib/glob.c \
 	lib/imapurl.c \
 	lib/imclient.c \
