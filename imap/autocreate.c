@@ -635,6 +635,11 @@ int autocreate_user(struct namespace *namespace,
     const char *source_script;
 #endif
 
+    /* Check for autocreatequota */
+    if (!autocreatequota) {
+	return IMAP_MAILBOX_NONEXISTENT;
+    }
+
     /* check for anonymous */
     if (!strcmp(userid, "anonymous"))
 	return IMAP_MAILBOX_NONEXISTENT;
