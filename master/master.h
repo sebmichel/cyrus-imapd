@@ -83,6 +83,12 @@ extern int nservices;
  * This field is intended to avoid duplicate free by doing free only when
  * associate is zero.
  *
+ *
+ * Update for cyrus 2.5:
+ *
+ * Blocks now don't share anymore name, listen and proto between primary and
+ * associate entries. This allows a finer control of all listening instances.
+ *
  */
 
 #endif /* HAVE_MASTER_H */

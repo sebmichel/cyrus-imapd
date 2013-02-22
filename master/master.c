@@ -629,7 +629,7 @@ static void service_create(struct service *s)
 	case AF_UNIX:	s->familyname = "unix"; break;
 	case AF_INET:	s->familyname = "ipv4"; break;
 	case AF_INET6:	s->familyname = "ipv6"; break;
-	default:	s->familyname =	"unknown"; break;
+	default:	s->familyname = "unknown"; break;
 	}
 	/* Reset data: should already be done for newly activated primary,
 	 * but is necessary for (re-)activated non-primary services since the
@@ -1481,8 +1481,8 @@ static void process_msg(int si, struct notify_message *msg)
 	syslog(LOG_ERR,
 	       "service %s/%s pid %d: changing from service %s/%s due to received message",
 	       SERVICEPARAM(s->name), SERVICEPARAM(s->familyname), c->pid,
-	       ((c->si != SERVICE_NONE && Services[c->si].name) ? Services[c->si].name : "unknown"),
-	       ((c->si != SERVICE_NONE) ? Services[c->si].familyname : "unknown"));
+	       ((c->si != SERVICE_NONE) ? SERVICEPARAM(Services[c->si].name) : "unknown"),
+	       ((c->si != SERVICE_NONE) ? SERVICEPARAM(Services[c->si].familyname) : "unknown"));
 	c->si = si;
     }
     switch (c->service_state) {
