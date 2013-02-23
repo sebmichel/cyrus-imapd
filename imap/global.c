@@ -304,6 +304,10 @@ EXPORTED int cyrus_init(const char *alt_config, const char *ident, unsigned flag
 				  config_getstring(IMAPOPT_SQL_ENGINE));
 	libcyrus_config_setstring(CYRUSOPT_SQL_HOSTNAMES,
 				  config_getstring(IMAPOPT_SQL_HOSTNAMES));
+	libcyrus_config_setint(CYRUSOPT_SQL_BACKOFF_TIME,
+			       config_getint(IMAPOPT_SQL_BACKOFF_TIME));
+	libcyrus_config_setint(CYRUSOPT_SQL_IDLE_TIMEOUT,
+			       config_getint(IMAPOPT_SQL_IDLE_TIMEOUT));
 	libcyrus_config_setstring(CYRUSOPT_SQL_USER,
 				  config_getstring(IMAPOPT_SQL_USER));
 	libcyrus_config_setstring(CYRUSOPT_SQL_PASSWD,

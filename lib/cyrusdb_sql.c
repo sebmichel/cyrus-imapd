@@ -54,6 +54,7 @@
 #include "cyrusdb.h"
 #include "exitcodes.h"
 #include "libcyr_cfg.h"
+#include "ptrarray.h"
 #include "xmalloc.h"
 #include "util.h"
 
@@ -66,24 +67,48 @@ typedef int exec_cb(void *rock,
 typedef struct sql_engine {
     const char *name;
     const char *binary_type;
+    const char *cmd_begin_txn;
+    const char *cmd_commit_txn;
+    const char *cmd_rollback_txn;
     void *(*sql_open)(char *host, char *port, int usessl,
 		      const char *user, const char *password,
 		      const char *database);
     char *(*sql_escape)(void *conn, char **to,
 			const char *from, size_t fromlen);
-    int (*sql_begin_txn)(void *conn);
-    int (*sql_commit_txn)(void *conn);
-    int (*sql_rollback_txn)(void *conn);
-    int (*sql_exec)(void *conn, const char *cmd, exec_cb *cb, void *rock);
+    int (*sql_exec)(void *conn, const char *cmd, exec_cb *cb, void *rock,
+		    int *failover);
     void (*sql_close)(void *conn);
 } sql_engine_t;
 
+/** DB host data. */
+typedef struct {
+    /** Host name */
+    char *hostname;
+    /** Host port */
+    char *port;
+    /** Last time the host was seen active */
+    time_t lastactive;
+    /** Time at which host can become active again, -1 if available right now */
+    time_t backoff_mark;
+    /** Whether the host was already tried in current failover */
+    int tried;
+} dbhost_t;
+
 struct dbengine {
     void *conn;     /* connection to database */
+    char *database; /* database that we are operating on */
+    char *user;     /* db user login */
+    char *password; /* db user password */
+    int usessl;     /* whether we use SSL */
     char *table;    /* table that we are operating on */
     char *esc_key;  /* allocated buffer for escaped key */
     char *esc_data; /* allocated buffer for escaped data */
     char *data;     /* allocated buffer for fetched data */
+
+    ptrarray_t *hosts;  /* available hosts */
+    int activeidx;      /* index of active host, -1 if none */
+    int backoff_time;   /* backoff time upon connection failure */
+    int idle_timeout;   /* time a connection should be able to stay idle */
 };
 
 struct txn {
@@ -96,6 +121,7 @@ static const sql_engine_t *dbengine = NULL;
 
 
 #ifdef HAVE_MYSQL
+#include <errmsg.h>
 #include <mysql.h>
 
 static void *_mysql_open(char *host, char *port, int usessl,
@@ -103,34 +129,67 @@ static void *_mysql_open(char *host, char *port, int usessl,
 			 const char *database)
 {
     MYSQL *mysql;
-    
+    void *conn;
+
     if (!(mysql = mysql_init(NULL))) {
 	syslog(LOG_ERR, "DBERROR: SQL backend could not execute mysql_init()");
 	return NULL;
     }
-    
-    return mysql_real_connect(mysql, host, user, password, database,
+
+    conn = mysql_real_connect(mysql, host, user, password, database,
 			      port ? strtoul(port, NULL, 10) : 0, NULL,
 			      usessl ? CLIENT_SSL : 0);
+
+    if (!conn) {
+	syslog(LOG_ERR, "DBERROR: SQL backend: %s", mysql_error(mysql));
+	mysql_close(mysql);
+    }
+
+    return conn;
 }
 
 static char *_mysql_escape(void *conn, char **to,
 			   const char *from, size_t fromlen)
 {
-    size_t tolen;
-
     *to = xrealloc(*to, 2 * fromlen + 1); /* +1 for NUL */
 
-    tolen = mysql_real_escape_string(conn, *to, from, fromlen);
+    mysql_real_escape_string(conn, *to, from, fromlen);
 
     return *to;
 }
 
-static int _mysql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
+static void _mysql_check_error(void *conn, int *failover)
+{
+    if (!failover) {
+	return;
+    }
+
+    /* Note: SQLState is HY000 for client errors, so rely on mysql_errno */
+    switch (mysql_errno(conn)) {
+    case CR_SERVER_GONE_ERROR:
+	/* MySQL server has gone away */
+    case CR_SERVER_LOST:
+	/* Lost connection to MySQL server during query */
+    case CR_SERVER_LOST_EXTENDED:
+	/* Lost connection to MySQL server at '%s', system error: %d */
+    case CR_INVALID_CONN_HANDLE:
+	/* Invalid connection handle */
+	*failover = 1;
+	break;
+
+    default:
+	break;
+    }
+}
+
+static int _mysql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock,
+    int *failover)
 {
     MYSQL_RES *result;
     MYSQL_ROW row;
     int len, r = 0;
+
+    if (failover) *failover = 0;
 
     syslog(LOG_DEBUG, "executing SQL cmd: %s", cmd);
 
@@ -142,6 +201,7 @@ static int _mysql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
     if ((mysql_real_query(conn, cmd, len) < 0) ||
 	*mysql_error(conn)) {
 	syslog(LOG_ERR, "DBERROR: SQL query failed: %s", mysql_error(conn));
+	_mysql_check_error(conn, failover);
 	return CYRUSDB_INTERNAL;
     }
 
@@ -154,7 +214,12 @@ static int _mysql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
 
     /* get the results */
     result = mysql_store_result(conn);
-    
+    if (!result) {
+	syslog(LOG_ERR, "DBERROR: SQL query failed: %s", mysql_error(conn));
+	_mysql_check_error(conn, failover);
+	return CYRUSDB_INTERNAL;
+    }
+
     /* process the results */
     while (!r && (row = mysql_fetch_row(result))) {
 	unsigned long *length = mysql_fetch_lengths(result);
@@ -163,29 +228,8 @@ static int _mysql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
 
     /* free result */
     mysql_free_result(result);
-    
+
     return r;
-}
-
-static int _mysql_begin_txn(void *conn)
-{
-    return _mysql_exec(conn,
-#if MYSQL_VERSION_ID >= 40011
-		       "START TRANSACTION",
-#else
-		       "BEGIN",
-#endif
-		       NULL, NULL);
-}
-
-static int _mysql_commit_txn(void *conn)
-{
-    return _mysql_exec(conn, "COMMIT", NULL, NULL);
-}
-
-static int _mysql_rollback_txn(void *conn)
-{
-    return _mysql_exec(conn, "ROLLBACK", NULL, NULL);
 }
 
 static void _mysql_close(void *conn)
@@ -230,7 +274,8 @@ static void *_pgsql_open(char *host, char *port, int usessl,
 
     if ((PQstatus(conn) != CONNECTION_OK)) {
 	syslog(LOG_ERR, "DBERROR: SQL backend: %s", PQerrorMessage(conn));
-	return NULL;
+	PQfinish(conn);
+	conn = NULL;
     }
 
     return conn;
@@ -246,11 +291,30 @@ static char *_pgsql_escape(void *conn __attribute__((unused)),
     return (char *) PQescapeBytea((unsigned char *) from, fromlen, &tolen);
 }
 
-static int _pgsql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
+static void _pgsql_check_error(PGresult *result, int *failover)
+{
+    const char *sqlState;
+
+    if (!failover) {
+	return;
+    }
+
+    /* Note: SQLState, which is always present - at least if status is not
+     * PGRES_FATAL_ERROR, is in class 08 for connection issues */
+    sqlState = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+    if (!sqlState || !strncmp("08", sqlState, 2)) {
+	*failover = 1;
+    }
+}
+
+static int _pgsql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock,
+    int *failover)
 {
     PGresult *result;
     int row_count, i, r = 0;
     ExecStatusType status;
+
+    if (failover) *failover = 0;
 
     syslog(LOG_DEBUG, "executing SQL cmd: %s", cmd);
 
@@ -267,6 +331,7 @@ static int _pgsql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
     else if (status != PGRES_TUPLES_OK) {
 	/* error */
 	syslog(LOG_DEBUG, "SQL backend: %s ", PQresStatus(status));
+	_pgsql_check_error(result, failover);
 	PQclear(result);
 	return CYRUSDB_INTERNAL;
     }
@@ -290,21 +355,6 @@ static int _pgsql_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
     PQclear(result);
 
     return r;
-}
-
-static int _pgsql_begin_txn(void *conn)
-{
-    return _pgsql_exec(conn, "BEGIN;", NULL, NULL);
-}
-
-static int _pgsql_commit_txn(void *conn)
-{
-    return _pgsql_exec(conn, "COMMIT;", NULL, NULL);
-}
-
-static int _pgsql_rollback_txn(void *conn)
-{
-    return _pgsql_exec(conn, "ROLLBACK;", NULL, NULL);
 }
 
 static void _pgsql_close(void *conn)
@@ -331,6 +381,7 @@ static void *_sqlite_open(char *host __attribute__((unused)),
     if (rc != SQLITE_OK) {
 	syslog(LOG_ERR, "DBERROR: SQL backend: %s", sqlite3_errmsg(db));
 	sqlite3_close(db);
+	db = NULL;
     }
 
     return db;
@@ -350,15 +401,18 @@ static char *_sqlite_escape(void *conn __attribute__((unused)),
     tolen = fromlen;
     (*to)[tolen] = '\0';
 #endif
-    
+
     return *to;
 }
 
-static int _sqlite_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
+static int _sqlite_exec(void *conn, const char *cmd, exec_cb *cb, void *rock,
+    int *failover)
 {
     int rc, r = 0;
     sqlite3_stmt *stmt = NULL;
     const char *tail;
+
+    if (failover) *failover = 0;
 
     syslog(LOG_DEBUG, "executing SQL cmd: %s", cmd);
 
@@ -389,21 +443,6 @@ static int _sqlite_exec(void *conn, const char *cmd, exec_cb *cb, void *rock)
     return r;
 }
 
-static int _sqlite_begin_txn(void *conn)
-{
-    return _sqlite_exec(conn, "BEGIN TRANSACTION", NULL, NULL);
-}
-
-static int _sqlite_commit_txn(void *conn)
-{
-    return _sqlite_exec(conn, "COMMIT TRANSACTION", NULL, NULL);
-}
-
-static int _sqlite_rollback_txn(void *conn)
-{
-    return _sqlite_exec(conn, "ROLLBACK TRANSACTION", NULL, NULL);
-}
-
 static void _sqlite_close(void *conn)
 {
     sqlite3_close(conn);
@@ -413,18 +452,26 @@ static void _sqlite_close(void *conn)
 
 static const sql_engine_t sql_engines[] = {
 #ifdef HAVE_MYSQL
-    { "mysql", "BLOB", &_mysql_open, &_mysql_escape,
-      &_mysql_begin_txn, &_mysql_commit_txn, &_mysql_rollback_txn,
+    { "mysql", "BLOB",
+#if MYSQL_VERSION_ID >= 40011
+       "START TRANSACTION",
+#else
+       "BEGIN",
+#endif
+       "COMMIT", "ROLLBACK",
+       &_mysql_open, &_mysql_escape,
       &_mysql_exec, &_mysql_close },
 #endif /* HAVE_MYSQL */
 #ifdef HAVE_PGSQL
-    { "pgsql", "BYTEA", &_pgsql_open, &_pgsql_escape,
-      &_pgsql_begin_txn, &_pgsql_commit_txn, &_pgsql_rollback_txn,
+    { "pgsql", "BYTEA",
+      "BEGIN;", "COMMIT;", "ROLLBACK;",
+      &_pgsql_open, &_pgsql_escape,
       &_pgsql_exec, &_pgsql_close },
 #endif
 #ifdef HAVE_SQLITE
-    { "sqlite", "BLOB", &_sqlite_open, &_sqlite_escape,
-      &_sqlite_begin_txn, &_sqlite_commit_txn, &_sqlite_rollback_txn,
+    { "sqlite", "BLOB",
+      "BEGIN TRANSACTION", "COMMIT TRANSACTION", "ROLLBACK TRANSACTION",
+      &_sqlite_open, &_sqlite_escape,
       &_sqlite_exec, &_sqlite_close },
 #endif
     { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL }
@@ -471,32 +518,259 @@ static int done(void)
     return 0;
 }
 
+static inline void dbhost_failed(struct dbengine *db, dbhost_t *dbhost)
+{
+    dbhost->backoff_mark = time(NULL) + db->backoff_time;
+}
+
+static void *dbhost_connect(struct dbengine *db, dbhost_t *dbhost)
+{
+    void *conn;
+
+    syslog(LOG_DEBUG, "SQL backend trying to open db '%s' on host '%s' port '%s'%s",
+	db->database, dbhost->hostname, dbhost->port ? dbhost->port : "",
+	db->usessl ? " using SSL" : "");
+
+    conn = dbengine->sql_open(dbhost->hostname, dbhost->port, db->usessl,
+	db->user, db->password, db->database);
+    if (conn) {
+	dbhost->backoff_mark = (time_t)-1;
+	dbhost->lastactive = time(NULL);
+    }
+    else {
+	syslog(LOG_WARNING, "DBERROR: SQL backend could not connect to host '%s' port '%s'",
+	    dbhost->hostname, dbhost->port ? dbhost->port : "");
+
+	dbhost_failed(db, dbhost);
+    }
+
+    return conn;
+}
+
+static dbhost_t *dbhost_failover(struct dbengine *db, int idx, int untried)
+{
+    dbhost_t *dbhost;
+    dbhost_t *activehost = NULL;
+    void *activeconn = NULL;
+    int i;
+
+    for (i=0; !activehost && (i<db->hosts->count); i++, idx++) {
+	if (idx >= db->hosts->count) {
+	    idx = 0;
+	}
+
+	dbhost = (dbhost_t *)ptrarray_nth(db->hosts, idx);
+
+	if ((untried && dbhost->tried) ||
+	    ((dbhost->backoff_mark != (time_t)-1)
+		&& (time(NULL) < dbhost->backoff_mark))
+	    )
+	{
+	    continue;
+	}
+
+	/* here is a candidate */
+	activehost = dbhost;
+	activehost->tried = 1;
+	if (db->activeidx != idx) {
+	    /* make sure we can use it */
+	    activeconn = dbhost_connect(db, activehost);
+	    if (activeconn) {
+		/* we got our new preferred active connection */
+		if (db->conn) {
+		    dbengine->sql_close(db->conn);
+		}
+		db->conn = activeconn;
+		db->activeidx = idx;
+
+		syslog(LOG_DEBUG, "SQL backend switched db '%s' connection to host '%s' port '%s'",
+		    db->database, activehost->hostname,
+		    activehost->port ? activehost->port : "");
+	    }
+	    else {
+		activehost = NULL;
+	    }
+	}
+	/* else: actually currently active */
+    }
+
+    return activehost;
+}
+
+static int _sql_exec(struct dbengine *db, int failover,
+    const char *cmd, exec_cb *cb, void *rock)
+{
+    dbhost_t *activehost = NULL;
+    int sql_res;
+    int idx;
+    int i;
+
+    if (!db->hosts->count) {
+	syslog(LOG_ERR, "DBERROR: could not open SQL database '%s': no hosts", db->database);
+	return CYRUSDB_INTERNAL;
+    }
+
+    if (db->activeidx >= 0) {
+	activehost = ptrarray_nth(db->hosts, db->activeidx);
+    }
+
+    if (!failover) {
+	/* failover disabled for this query */
+	if (db->conn) {
+	    sql_res = dbengine->sql_exec(db->conn, cmd, cb, rock, NULL);
+	}
+
+	goto done;
+    }
+
+    /* If the active host is not our preferred one, check if we can now use a
+     * more preferred one. */
+    if (db->activeidx != 0) {
+	activehost = dbhost_failover(db, 0, 0);
+    }
+
+    /* Safety net: at most, we will try each host once. */
+    for (i=0; i<db->hosts->count; i++) {
+	dbhost_t *dbhost = (dbhost_t *)ptrarray_nth(db->hosts, i);
+	dbhost->tried = 0;
+    }
+
+    while (db->conn) {
+	/* do the query now */
+	sql_res = dbengine->sql_exec(db->conn, cmd, cb, rock, &failover);
+	if (!failover) {
+	    /* no need for failover */
+	    break;
+	}
+
+	syslog(LOG_DEBUG, "SQL backend failover closing db '%s' connection to host '%s' port '%s'",
+	    db->database, activehost->hostname,
+	    activehost->port ? activehost->port : "");
+
+	idx = db->activeidx;
+	dbengine->sql_close(db->conn);
+	db->conn = NULL;
+	db->activeidx = -1;
+	dbhost_failed(db, activehost);
+	/* Note: we are supposed to be currently connected to the most
+	 * preferred available host. So check the remaining ones.
+	 * As a last chance if none works, dbhost_failover also checks if
+	 * more preferred hosts, and the currently faulty one, became
+	 * available again while we were playing around.
+	 *
+	 * Special case: if connection stayed idle beyond timeout, first try
+	 * to reconnect before looking at the remaining hosts.
+	 */
+	if (!activehost->tried &&
+	    (activehost->lastactive + db->idle_timeout < time(NULL)))
+	{
+	    syslog(LOG_DEBUG, "SQL backend failover trying to reconnect first");
+	    activehost->backoff_mark = (time_t)-1;
+	    /* trick to try current host first */
+	    idx--;
+	}
+	activehost = dbhost_failover(db, idx + 1, 1);
+	/* try again */
+    }
+
+  done:
+    if (!db->conn) {
+	/* bad news */
+	sql_res = CYRUSDB_IOERROR;
+    }
+
+    /* update last activity time upon success */
+    switch (sql_res) {
+    case CYRUSDB_OK:
+    case CYRUSDB_DONE:
+    case CYRUSDB_EXISTS:
+    case CYRUSDB_NOTFOUND:
+	activehost->lastactive = time(NULL);
+	break;
+
+    default:
+	break;
+    }
+
+    return sql_res;
+}
+
+static char *_sql_escape(struct dbengine *db, char **to,
+    const char *from, size_t fromlen)
+{
+    /* some implementations (MySQL) require a connection ... */
+    if (!db->conn) {
+	dbhost_failover(db, 0, 0);
+    }
+
+    if (!db->conn) {
+	/* bad news */
+	syslog(LOG_ERR, "DBERROR: no SQL connection available");
+	return NULL;
+    }
+
+    return dbengine->sql_escape(db->conn, to, from, fromlen);
+}
+
+static int myclose(struct dbengine *db)
+{
+    assert(db);
+
+    if (db->conn) dbengine->sql_close(db->conn);
+    if (db->database) free(db->database);
+    if (db->user) free(db->user);
+    if (db->password) free(db->password);
+    if (db->table) free(db->table);
+    if (db->esc_key) free(db->esc_key);
+    if (db->esc_data) free(db->esc_data);
+    if (db->data) free(db->data);
+    if (db->hosts) {
+	dbhost_t *dbhost = NULL;
+
+	while ((dbhost = ptrarray_pop(db->hosts)) != NULL) {
+	    free(dbhost->hostname);
+	    if (dbhost->port) free(dbhost->port);
+	}
+	ptrarray_free(db->hosts);
+    }
+    free(db);
+
+    return 0;
+}
+
 static int myopen(const char *fname, int flags, struct dbengine **ret)
 {
     const char *database, *hostnames, *user, *passwd;
     char *host_ptr, *host, *cur_host, *cur_port;
-    int usessl;
-    void *conn = NULL;
-    char *p, *table, cmd[1024];
+    char *p, cmd[1024];
+    struct dbengine *db;
+    dbhost_t *dbhost;
+    int r = 0;
 
     assert(fname);
     assert(ret);
 
-    /* make a connection to the database */
+    /* get database connection parameters */
     database = libcyrus_config_getstring(CYRUSOPT_SQL_DATABASE);
     hostnames = libcyrus_config_getstring(CYRUSOPT_SQL_HOSTNAMES);
     user = libcyrus_config_getstring(CYRUSOPT_SQL_USER);
     passwd = libcyrus_config_getstring(CYRUSOPT_SQL_PASSWD);
-    usessl = libcyrus_config_getswitch(CYRUSOPT_SQL_USESSL);
 
-    /* loop around hostnames until we get a connection */
-    syslog(LOG_DEBUG, "SQL backend trying to connect to a host");
-    
+    db = *ret = (struct dbengine *) xzmalloc(sizeof(struct dbengine));
+    db->hosts = ptrarray_new();
+    db->activeidx = -1;
+    if (user) db->user = xstrdup(user);
+    if (passwd) db->password = xstrdup(passwd);
+    db->usessl = libcyrus_config_getswitch(CYRUSOPT_SQL_USESSL);
+    db->backoff_time = libcyrus_config_getint(CYRUSOPT_SQL_BACKOFF_TIME);
+    db->idle_timeout = libcyrus_config_getint(CYRUSOPT_SQL_IDLE_TIMEOUT);
+
     /* create a working version of the hostnames */
     host_ptr = hostnames ? xstrdup(hostnames) : NULL;
 
     /* make sqlite clever */
     if (!database) database = fname;
+    db->database = xstrdup(database);
 
     cur_host = host = host_ptr;
     while (cur_host != NULL) {
@@ -507,85 +781,65 @@ static int myopen(const char *fname, int flags, struct dbengine **ret)
 	    /* loop till we find some text */
 	    while (!Uisalnum(host[0])) host++;
 	}
-	
-	syslog(LOG_DEBUG,
-	       "SQL backend trying to open db '%s' on host '%s'%s",
-	       database, cur_host, usessl ? " using SSL" : "");
-	
+
 	/* set the optional port */
 	if ((cur_port = strchr(cur_host, ':'))) *cur_port++ = '\0';
-	
-	conn = dbengine->sql_open(cur_host, cur_port, usessl,
-				  user, passwd, database);
-	if (conn) break;
-	
-	syslog(LOG_WARNING,
-	       "DBERROR: SQL backend could not connect to host %s", cur_host);
-	
+
+	dbhost = (dbhost_t *)xzmalloc(sizeof(dbhost_t));
+	dbhost->hostname = xstrdup(cur_host);
+	dbhost->port = cur_port ? xstrdup(cur_port) : NULL;
+	dbhost->backoff_mark = (time_t)-1;
+	ptrarray_append(db->hosts, dbhost);
+
 	cur_host = host;
     }
 
     if (host_ptr) free(host_ptr);
 
-    if (!conn) {
-	syslog(LOG_ERR, "DBERROR: could not open SQL database '%s'", database);
-	return CYRUSDB_IOERROR;
-    }
-
     /* get the name of the table and CREATE it if necessary */
 
     /* strip any path from the fname */
     p = strrchr(fname, '/');
-    table = xstrdup(p ? ++p : fname);
+    db->table = xstrdup(p ? ++p : fname);
 
     /* convert '.' to '_' */
-    if ((p = strrchr(table, '.'))) *p = '_';
+    if ((p = strrchr(db->table, '.'))) *p = '_';
 
     /* check if the table exists */
     /* XXX is this the best way to do this? */
-    snprintf(cmd, sizeof(cmd), "SELECT * FROM %s LIMIT 0;", table);
-    if (dbengine->sql_exec(conn, cmd, NULL, NULL)) {
-	if (flags & CYRUSDB_CREATE) {
+    snprintf(cmd, sizeof(cmd), "SELECT * FROM %s LIMIT 0;", db->table);
+
+    if (_sql_exec(db, 1, cmd, NULL, NULL)) {
+	if (db->conn && (flags & CYRUSDB_CREATE)) {
 	    /* create the table */
 	    snprintf(cmd, sizeof(cmd),
 		     "CREATE TABLE %s (dbkey %s NOT NULL, data %s);",
-		     table, dbengine->binary_type, dbengine->binary_type);
-	    if (dbengine->sql_exec(conn, cmd, NULL, NULL)) {
+		     db->table, dbengine->binary_type, dbengine->binary_type);
+	    if (_sql_exec(db, 0, cmd, NULL, NULL)) {
 		syslog(LOG_ERR, "DBERROR: SQL failed: %s", cmd);
-		dbengine->sql_close(conn);
-		return CYRUSDB_INTERNAL;
+		r = CYRUSDB_INTERNAL;
+		goto done;
 	    }
 	}
 	else {
-	    return CYRUSDB_NOTFOUND;
+	    r = db->conn ? CYRUSDB_NOTFOUND : CYRUSDB_INTERNAL;
+	    goto done;
 	}
     }
 
-    *ret = (struct dbengine *) xzmalloc(sizeof(struct dbengine));
-    (*ret)->conn = conn;
-    (*ret)->table = table;
+  done:
+    if (r && db) {
+	myclose(db);
+	*ret = NULL;
+    }
 
-    return 0;
-}
-
-static int myclose(struct dbengine *db)
-{
-    assert(db);
-
-    dbengine->sql_close(db->conn);
-    free(db->table);
-    if (db->esc_key) free(db->esc_key);
-    if (db->esc_data) free(db->esc_data);
-    if (db->data) free(db->data);
-    free(db);
-
-    return 0;
+    return r;
 }
 
 static struct txn *start_txn(struct dbengine *db)
 {
     /* start a transaction */
-    if (dbengine->sql_begin_txn(db->conn)) {
+    if (_sql_exec(db, 1, dbengine->cmd_begin_txn, NULL, NULL)) {
 	syslog(LOG_ERR, "DBERROR: failed to start txn on %s",
 	       db->table);
 	return NULL;
@@ -674,15 +928,23 @@ static int fetch(struct dbengine *db,
     }
 
     /* fetch the data */
-    esc_key = dbengine->sql_escape(db->conn, &db->esc_key, key, keylen);
+    cmd[0] = 0;
+    esc_key = _sql_escape(db, &db->esc_key, key, keylen);
+    if (!esc_key && key) {
+	r = CYRUSDB_INTERNAL;
+	goto done;
+    }
     snprintf(cmd, sizeof(cmd),
 	     "SELECT * FROM %s WHERE dbkey = '%s';", db->table, esc_key);
     if (esc_key != db->esc_key) free(esc_key);
-    r = dbengine->sql_exec(db->conn, cmd, &select_cb, &srock);
+    r = _sql_exec(db, !tid, cmd, &select_cb, &srock);
 
+  done:
     if (r) {
-	syslog(LOG_ERR, "DBERROR: SQL failed %s", cmd);
-	if (tid) dbengine->sql_rollback_txn(db->conn);
+	if (cmd[0]) {
+	    syslog(LOG_ERR, "DBERROR: SQL failed %s", cmd);
+	}
+	if (tid) _sql_exec(db, 0, dbengine->cmd_rollback_txn, NULL, NULL);
 	return CYRUSDB_INTERNAL;
     }
 
@@ -714,18 +976,25 @@ static int foreach(struct dbengine *db,
     }
 
     /* fetch the data */
+    cmd[0] = 0;
     if (prefixlen) /* XXX hack for SQLite */
-	esc_key = dbengine->sql_escape(db->conn, &db->esc_key,
-				       prefix, prefixlen);
+	esc_key = _sql_escape(db, &db->esc_key, prefix, prefixlen);
+    if (!esc_key && prefix) {
+	r = CYRUSDB_INTERNAL;
+	goto done;
+    }
     snprintf(cmd, sizeof(cmd),
 	     "SELECT * FROM %s WHERE dbkey LIKE '%s%%' ORDER BY dbkey;",
 	     db->table, esc_key ? esc_key : "");
     if (esc_key && (esc_key != db->esc_key)) free(esc_key);
-    r = dbengine->sql_exec(db->conn, cmd, &select_cb, &srock);
+    r = _sql_exec(db, !tid, cmd, &select_cb, &srock);
 
+  done:
     if (r) {
-	syslog(LOG_ERR, "DBERROR: SQL failed %s", cmd);
-	if (tid) dbengine->sql_rollback_txn(db->conn);
+	if (cmd[0]) {
+	    syslog(LOG_ERR, "DBERROR: SQL failed %s", cmd);
+	}
+	if (tid) _sql_exec(db, 0, dbengine->cmd_rollback_txn, NULL, NULL);
 	return CYRUSDB_INTERNAL;
     }
 
@@ -752,14 +1021,19 @@ static int mystore(struct dbengine *db,
 
     if (tid && !*tid && !(*tid = start_txn(db))) return CYRUSDB_INTERNAL;
 
-    esc_key = dbengine->sql_escape(db->conn, &db->esc_key, key, keylen);
+    cmd[0] = 0;
+    esc_key = _sql_escape(db, &db->esc_key, key, keylen);
+    if (!esc_key && key) {
+	r = CYRUSDB_INTERNAL;
+	goto done;
+    }
     free_esc_key = (esc_key != db->esc_key);
 
     if (isdelete) {
 	/* DELETE the entry */
 	snprintf(cmd, sizeof(cmd), "DELETE FROM %s WHERE dbkey = '%s';",
 		 db->table, esc_key);
-	r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
+	r = _sql_exec(db, !tid, cmd, NULL, NULL);
 
 	/* see if we just removed the previously SELECTed key */
 	if (!r && tid && *tid &&
@@ -772,8 +1046,11 @@ static int mystore(struct dbengine *db,
 	/* INSERT/UPDATE the entry */
 	struct select_rock srock = { 0, NULL, NULL, NULL, NULL };
 
-	char *esc_data = dbengine->sql_escape(db->conn, &db->esc_data,
-					      data, datalen);
+	char *esc_data = _sql_escape(db, &db->esc_data, data, datalen);
+	if (!esc_data && data) {
+	    r = CYRUSDB_INTERNAL;
+	    goto done;
+	}
 	int free_esc_data = (esc_data != db->esc_data);
 
 	/* see if we just SELECTed this key in this transaction */
@@ -790,7 +1067,7 @@ static int mystore(struct dbengine *db,
 	    snprintf(cmd, sizeof(cmd),
 		     "SELECT * FROM %s WHERE dbkey = '%s';",
 		     db->table, esc_key);
-	    r = dbengine->sql_exec(db->conn, cmd, &select_cb, &srock);
+	    r = _sql_exec(db, !tid, cmd, &select_cb, &srock);
 	}
 
 	if (!r && srock.found) {
@@ -799,10 +1076,10 @@ static int mystore(struct dbengine *db,
 		snprintf(cmd, sizeof(cmd),
 			 "UPDATE %s SET data = '%s' WHERE dbkey = '%s';",
 			 db->table, esc_data, esc_key);
-		r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
+		r = _sql_exec(db, !tid, cmd, NULL, NULL);
 	    }
 	    else {
-		if (tid) dbengine->sql_rollback_txn(db->conn);
+		if (tid) _sql_exec(db, 0, dbengine->cmd_rollback_txn, NULL, NULL);
 		return CYRUSDB_EXISTS;
 	    }
 	}
@@ -811,17 +1088,20 @@ static int mystore(struct dbengine *db,
 	    snprintf(cmd, sizeof(cmd),
 		     "INSERT INTO %s VALUES ('%s', '%s');",
 		     db->table, esc_key, esc_data);
-	    r = dbengine->sql_exec(db->conn, cmd, NULL, NULL);
+	    r = _sql_exec(db, !tid, cmd, NULL, NULL);
 	}
 
 	if (free_esc_data) free(esc_data);
     }
 
+  done:
     if (free_esc_key) free(esc_key);
 
     if (r) {
-	syslog(LOG_ERR, "DBERROR: SQL failed: %s", cmd);
-	if (tid) dbengine->sql_rollback_txn(db->conn);
+	if (cmd[0]) {
+	    syslog(LOG_ERR, "DBERROR: SQL failed: %s", cmd);
+	}
+	if (tid) _sql_exec(db, 0, dbengine->cmd_rollback_txn, NULL, NULL);
 	return CYRUSDB_INTERNAL;
     }
 
@@ -855,8 +1135,9 @@ static int delete(struct dbengine *db,
 static int finish_txn(struct dbengine *db, struct txn *tid, int commit)
 {
     if (tid) {
-	int rc = commit ? dbengine->sql_commit_txn(db->conn) :
-	    dbengine->sql_rollback_txn(db->conn);
+	int rc = _sql_exec(db, 0,
+	    commit ? dbengine->cmd_commit_txn : dbengine->cmd_rollback_txn,
+	    NULL, NULL);
 
 	if (tid->lastkey) free(tid->lastkey);
 	free(tid);

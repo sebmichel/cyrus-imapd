@@ -1376,6 +1376,9 @@ product version in the capabilities */
 /* If enabled, this option causes LIST and LSUB output to always include
    the XLIST "special-use" flags */
 
+{ "sql_backoff_time", 60, INT }
+/* Failover backoff time (s) upon SQL database failure. */
+
 { "sql_database", NULL, STRING }
 /* Name of the database which contains the cyrusdb table(s). */
 
@@ -1384,6 +1387,10 @@ product version in the capabilities */
 
 { "sql_hostnames", "", STRING }
 /* Comma separated list of SQL servers (in host[:port] format). */
+
+{ "sql_idle_timeout", 3600, INT }
+/* Time (s) a SQL connection should be able to stay idle. Beyond that, failover
+   first tries to reconnect to the current host. */
 
 { "sql_passwd", NULL, STRING }
 /* Password to use for authentication to the SQL server. */

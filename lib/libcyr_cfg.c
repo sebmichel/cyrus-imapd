@@ -142,6 +142,14 @@ static struct cyrusopt_s cyrus_options[] = {
       CFGVAL(const char *, ""),
       CYRUS_OPT_STRING },
 
+    { CYRUSOPT_SQL_BACKOFF_TIME,
+      CFGVAL(long, 60),
+      CYRUS_OPT_INT },
+
+    { CYRUSOPT_SQL_IDLE_TIMEOUT,
+      CFGVAL(long, 3600),
+      CYRUS_OPT_INT },
+
     { CYRUSOPT_SQL_USER,
       CFGVAL(const char *, NULL),
       CYRUS_OPT_STRING },

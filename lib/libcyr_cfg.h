@@ -106,6 +106,10 @@ enum cyrus_opt {
     CYRUSOPT_SQL_ENGINE,
     /* SQL hostname(s) ("") */
     CYRUSOPT_SQL_HOSTNAMES,
+    /* SQL failover backoff time */
+    CYRUSOPT_SQL_BACKOFF_TIME,
+    /* SQL idle timeout */
+    CYRUSOPT_SQL_IDLE_TIMEOUT,
     /* SQL username */
     CYRUSOPT_SQL_USER,
     /* SQL password */
