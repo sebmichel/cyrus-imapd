@@ -516,8 +516,8 @@ int main(int argc, char **argv, char **envp)
 
 	if (fd < 0 && (signals_poll() || newfile)) {
 	    /* timed out (SIGALRM), SIGHUP, or new process file */
-	    if (MESSAGE_MASTER_ON_EXIT) 
-		notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
+	    /* Note: wake-up master to speed up janitoring */
+	    notify_master(STATUS_FD, MASTER_SERVICE_UNAVAILABLE);
 	    service_abort(0);
 	}
 	if (fd < 0) {
