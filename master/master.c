@@ -385,12 +385,64 @@ static int verify_service_file(const strarray_t *filename)
 static void service_forget_exec(struct service *s)
 {
     if (s->exec) {
-	/* Only free the service info on the primary */
-	if (s->associate == 0) {
-	    strarray_free(s->exec);
-	}
+	strarray_free(s->exec);
 	s->exec = NULL;
     }
+}
+
+static struct service *service_find(struct service *s, int prot_family)
+{
+    int i;
+    int j = -1;
+
+    for (i = 0; i < nservices; i++) {
+	/* our first choice is an exact match */
+	if ((Services[i].name && !strcmp(Services[i].name, s->name)) &&
+	    (Services[i].listen && !strcmp(Services[i].listen, s->listen)) &&
+	    (Services[i].proto && !strcmp(Services[i].proto, s->proto)) &&
+	    (Services[i].family == prot_family))
+	    break;
+
+	/* our second choice is an available entry */
+	if ((j == -1) && !Services[i].name &&
+	    !Services[i].listen && !Services[i].proto)
+	    j = i;
+    }
+
+    if ((i == nservices) && (j != -1)) {
+	/* the service did not already exist, but we have an available entry */
+	i = j;
+    }
+
+    return (i == nservices) ? NULL : &Services[i];
+}
+
+static void service_deactivate_associated(struct service *s)
+{
+    int i;
+
+    service_forget_exec(s);
+    for (i = 0; i < nservices; i++) {
+	if ((Services[i].associate > 0) &&
+	    Services[i].name && !strcmp(Services[i].name, s->name) &&
+	    Services[i].listen && !strcmp(Services[i].listen, s->listen) &&
+	    Services[i].proto && !strcmp(Services[i].proto, s->proto))
+	{
+	    service_forget_exec(&Services[i]);
+	}
+    }
+}
+
+static void service_dup(struct service *to, const struct service *from)
+{
+    memcpy(to, from, sizeof(struct service));
+    /* Duplicating configuration is necessary because primary
+     * service may end (and be freed) before its non-primary ones.
+     */
+    to->name = strdup(from->name);
+    to->listen = strdup(from->listen);
+    to->proto = strdup(from->proto);
+    to->exec = strarray_dup(from->exec);
 }
 
 static struct service *service_add(const struct service *proto)
@@ -405,8 +457,9 @@ static struct service *service_add(const struct service *proto)
     }
     s = &Services[nservices++];
 
-    if (proto)
-	memcpy(s, proto, sizeof(struct service));
+    if (proto) {
+	service_dup(s, proto);
+    }
     else {
 	memset(s, 0, sizeof(struct service));
 	s->socket = -1;
@@ -419,7 +472,10 @@ static struct service *service_add(const struct service *proto)
 
 static void service_create(struct service *s)
 {
-    struct service service0, service;
+    struct service service;
+    int associate = 0;
+    struct service *s0 = s;
+    int primary_failed = 1;
     struct addrinfo hints, *res0, *res;
     int error, nsocket = 0;
     struct sockaddr_un sunsock;
@@ -436,6 +492,14 @@ static void service_create(struct service *s)
 		EX_SOFTWARE);
 
     if (s->listen[0] == '/') { /* unix socket */
+	if (s->socket >= 0) {
+	    /* there are no non-primary services, and nothing else to do */
+	    if (verbose > 2) {
+		syslog(LOG_DEBUG, "service %s/%s still active",
+		    s->name, s->familyname);
+	    }
+	    return;
+	}
 	res0_is_local = 1;
 	res0 = (struct addrinfo *)xzmalloc(sizeof(struct addrinfo));
 	res0->ai_flags = AI_PASSIVE;
@@ -486,7 +550,7 @@ static void service_create(struct service *s)
 	} else {
 	    syslog(LOG_INFO, "invalid proto '%s', disabling %s",
 		   s->proto, s->name);
-	    service_forget_exec(s);
+	    service_deactivate_associated(s);
 	    return;
 	}
 
@@ -512,19 +576,60 @@ static void service_create(struct service *s)
 
 	if (error) {
 	    syslog(LOG_INFO, "%s, disabling %s", gai_strerror(error), s->name);
-	    service_forget_exec(s);
+	    service_deactivate_associated(s);
 	    return;
 	}
     }
 
-    memcpy(&service0, s, sizeof(struct service));
-
-    for (res = res0; res; res = res->ai_next) {
-	if (s->socket >= 0) {
-	    memcpy(&service, &service0, sizeof(struct service));
-	    s = &service;
+    for (res = res0; res; res = res->ai_next, associate++) {
+	if (associate > 0) {
+	    /* find existing/available entry, or prepare to create a new one */
+	    s = service_find(s, res->ai_family);
+	    if (!s) {
+		/* service not active, and no available entry */
+		memcpy(&service, s0, sizeof(struct service));
+		s = &service;
+		/* Notice we did not duplicate data, so if we fail there is only
+		 * the socket, if opened, to close. */
+	    }
+	    else if (s->socket >= 0) {
+		/* service still active, nothing to do */
+		if (verbose > 2) {
+		    syslog(LOG_DEBUG, "service %s/%s still active",
+			s->name, s->familyname);
+		}
+		/* as a non-primary service being reconfigured, we shall have
+		 * to reset our exec data */
+		if (!s->exec) {
+		    s->exec = strarray_dup(s0->exec);
+		}
+		s->nreadyfails = 0;
+		nsocket++;
+		continue;
+	    }
+	    else {
+		/* service not active, we got an available entry */
+		service_dup(s, s0);
+		/* Notice that if we fail, we only need to free the 'exec' field
+		 * since master janitoring will take care of the rest: the entry
+		 * is seen as one that is disabled but not yet removed. Closing
+		 * the socket is not necessary here, but is for other cases.
+		 */
+	    }
+	}
+	else if (s->socket >= 0) {
+	    /* service still active, nothing to do */
+	    if (verbose > 2) {
+		syslog(LOG_DEBUG, "service %s/%s still active",
+		    s->name, s->familyname);
+	    }
+	    primary_failed = 0;
+	    s->nreadyfails = 0;
+	    nsocket++;
+	    continue;
 	}
 
+	s->associate = associate;
 	s->family = res->ai_family;
 	switch (s->family) {
 	case AF_UNIX:	s->familyname = "unix"; break;
@@ -532,6 +637,17 @@ static void service_create(struct service *s)
 	case AF_INET6:	s->familyname = "ipv6"; break;
 	default:	s->familyname = "unknown"; break;
 	}
+	/* Reset data: should already be done for newly activated primary,
+	 * but is necessary for (re-)activated non-primary services since the
+	 * structure content was copied from a possibly active primary service.
+	 */
+	s->stat[0] = -1;
+	s->stat[1] = -1;
+	s->ready_workers = 0;
+	s->nforks = 0;
+	s->nactive = 0;
+	s->nconnections = 0;
+	s->nreadyfails = 0;
 
 	if (verbose > 2) {
 	    syslog(LOG_DEBUG, "activating service %s/%s",
@@ -542,6 +658,7 @@ static void service_create(struct service *s)
 	if (s->socket < 0) {
 	    syslog(LOG_ERR, "unable to open %s/%s socket: %m",
 		s->name, s->familyname);
+	    if ((associate > 0) && (s != &service)) service_forget_exec(s);
 	    continue;
 	}
 
@@ -580,6 +697,7 @@ static void service_create(struct service *s)
 	    syslog(LOG_ERR, "unable to bind to %s/%s socket: %m",
 		s->name, s->familyname);
 	    xclose(s->socket);
+	    if ((associate > 0) && (s != &service)) service_forget_exec(s);
 	    continue;
 	}
 
@@ -595,14 +713,15 @@ static void service_create(struct service *s)
 	    syslog(LOG_ERR, "unable to listen to %s/%s socket: %m",
 		s->name, s->familyname);
 	    xclose(s->socket);
+	    if ((associate > 0) && (s != &service)) service_forget_exec(s);
 	    continue;
 	}
 
-	s->ready_workers = 0;
-	s->associate = nsocket;
-
 	get_statsock(s->stat);
 
+	if (associate == 0) {
+	    primary_failed = 0;
+	}
 	if (s == &service)
 	    service_add(s);
 	nsocket++;
@@ -613,10 +732,11 @@ static void service_create(struct service *s)
 	else
 	    freeaddrinfo(res0);
     }
+    if (primary_failed) {
+	service_forget_exec(s0);
+    }
     if (nsocket <= 0) {
 	syslog(LOG_ERR, "unable to create %s listener socket: %m", s->name);
-	service_forget_exec(s);
-	return;
     }
 }
 
@@ -1030,7 +1150,6 @@ static void reap_child(void)
 				   SERVICEPARAM(s->name),
 				   SERVICEPARAM(s->familyname));
 			    service_forget_exec(s);
-			    xclose(s->socket);
 			}
 		    }
 		    break;
@@ -1581,6 +1700,7 @@ static void add_service(const char *name, struct entry *e, void *rock)
     }
 
     /* see if we have an existing entry that can be reused */
+    j = -1;
     for (i = 0; i < nservices; i++) {
 	/* skip non-primary instances */
 	if (Services[i].associate > 0)
@@ -1599,11 +1719,20 @@ static void add_service(const char *name, struct entry *e, void *rock)
 	    fatal(buf, EX_CONFIG);
 	}
 
-	/* must have empty/same service name, listen and proto */
-	if ((!Services[i].name || !strcmp(Services[i].name, name)) &&
-	    (!Services[i].listen || !strcmp(Services[i].listen, listen)) &&
-	    (!Services[i].proto || !strcmp(Services[i].proto, proto)))
+	/* our first choice is an exact match */
+	if ((Services[i].name && !strcmp(Services[i].name, name)) &&
+	    (Services[i].listen && !strcmp(Services[i].listen, listen)) &&
+	    (Services[i].proto && !strcmp(Services[i].proto, proto)))
 	    break;
+
+	/* our second choice is an available entry */
+	if ((j == -1) && !Services[i].name &&
+	    !Services[i].listen && !Services[i].proto)
+	    j = i;
+    }
+    if ((i == nservices) && (j != -1)) {
+	/* the service did not already exist, but we have an available entry */
+	i = j;
     }
 
     if (i == nservices) {
@@ -1657,7 +1786,11 @@ static void add_service(const char *name, struct entry *e, void *rock)
 	    if (Services[j].associate > 0 && Services[j].listen &&
 		Services[j].name && !strcmp(Services[j].name, name)) {
 		Services[j].maxforkrate = Services[i].maxforkrate;
-		Services[j].exec = Services[i].exec;
+		if (Services[j].listen) free(Services[j].listen);
+		Services[j].listen = strdup(Services[i].listen);
+		if (Services[j].proto) free (Services[j].proto);
+		Services[j].proto = strdup(Services[i].proto);
+		Services[j].exec = strarray_dup(Services[i].exec);
 		Services[j].desired_workers = Services[i].desired_workers;
 		Services[j].babysit = Services[i].babysit;
 		Services[j].max_workers = Services[i].max_workers;
@@ -1808,12 +1941,9 @@ static void reread_conf(void)
 		       Services[i].socket,
 		       Services[i].stat[0], Services[i].stat[1]);
 
-	    /* Only free the service info on the primary */
-	    if(Services[i].associate == 0) {
-		free(Services[i].listen);
-		free(Services[i].proto);
-	    }
+	    free(Services[i].listen);
 	    Services[i].listen = NULL;
+	    free(Services[i].proto);
 	    Services[i].proto = NULL;
 	    Services[i].desired_workers = 0;
 
@@ -1845,6 +1975,16 @@ static void reread_conf(void)
 		       Services[i].name, Services[i].familyname,
 		       Services[i].socket,
 		       Services[i].stat[0], Services[i].stat[1]);
+	}
+	else {
+	    /* remaining service: we may have to (re-)activate non-primary instances */
+
+	    service_create(&Services[i]);
+	    if (verbose > 2) {
+		syslog(LOG_DEBUG, "reinit: service %s/%s socket %d pipe %d %d",
+		   Services[i].name, Services[i].familyname,
+		   Services[i].socket, Services[i].stat[0], Services[i].stat[1]);
+	    }
 	}
     }
 
@@ -2228,16 +2368,24 @@ int main(int argc, char **argv)
 			      Services[i].name, Services[i].familyname,
 			      Services[i].stat[0], Services[i].stat[1]);
 
-		    /* Only free the service info on the primary */
-		    if (Services[i].associate == 0) {
-			free(Services[i].name);
-		    }
+		    free(Services[i].name);
 		    Services[i].name = NULL;
 		    Services[i].nforks = 0;
 		    Services[i].nactive = 0;
 		    Services[i].nconnections = 0;
+		    Services[i].nreadyfails = 0;
 		    Services[i].associate = 0;
 
+		    if (Services[i].listen) free(Services[i].listen);
+		    Services[i].listen = NULL;
+		    if (Services[i].proto) free(Services[i].proto);
+		    Services[i].proto = NULL;
+
+		    /* close all listeners */
+		    if (Services[i].socket >= 0) {
+			shutdown(Services[i].socket, SHUT_RDWR);
+			xclose(Services[i].socket);
+		    }
 		    xclose(Services[i].stat[0]);
 		    xclose(Services[i].stat[1]);
 		}
@@ -2273,6 +2421,7 @@ int main(int argc, char **argv)
 
 	    /* connections */
 	    if (y > 0 && Services[i].ready_workers == 0 &&
+		Services[i].exec &&
 		Services[i].nactive < Services[i].max_workers &&
 		!service_is_fork_limited(&Services[i])) {
 		if (verbose > 2)
