@@ -1962,24 +1962,19 @@ static void reread_conf(struct timeval now)
 	    shutdown(Services[i].socket, SHUT_RDWR);
 	    xclose(Services[i].socket);
 	}
-	else if (Services[i].exec && (Services[i].socket < 0)) {
-	    /* initialize new services */
-
-	    service_create(&Services[i]);
-	    if (verbose > 2)
-		syslog(LOG_DEBUG, "init: service %s/%s socket %d pipe %d %d",
-		       Services[i].name, Services[i].familyname,
-		       Services[i].socket,
-		       Services[i].stat[0], Services[i].stat[1]);
-	}
 	else {
-	    /* remaining service: we may have to (re-)activate non-primary instances */
+	    /* either we are initializing a new service, or this is a service
+	     * that remains and may have non-primary instances to (re-)activate
+	     */
+	    int newservice = (Services[i].exec && (Services[i].socket < 0));
 
 	    service_create(&Services[i]);
 	    if (verbose > 2) {
-		syslog(LOG_DEBUG, "reinit: service %s/%s socket %d pipe %d %d",
+		syslog(LOG_DEBUG, "%sinit: service %s/%s socket %d pipe %d %d",
+		   newservice ? "" : "re",
 		   Services[i].name, Services[i].familyname,
-		   Services[i].socket, Services[i].stat[0], Services[i].stat[1]);
+		   Services[i].socket,
+		   Services[i].stat[0], Services[i].stat[1]);
 	    }
 	}
     }
