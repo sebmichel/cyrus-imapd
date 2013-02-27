@@ -185,6 +185,7 @@ static struct timeval janitor_mark;	/* Last time janitor did a sweep */
 
 static void limit_fds(rlim_t);
 static void schedule_event(struct event *a);
+static void sighandler_reset(int restartable);
 static void child_sighandler_setup(void);
 
 #if HAVE_PSELECT
@@ -194,6 +195,7 @@ static sigset_t pselect_sigmask;
 static int myselect(int nfds, fd_set *rfds, fd_set *wfds,
 		    fd_set *efds, struct timeval *tout)
 {
+    int r;
 #if HAVE_PSELECT
     /* pselect() closes the race between SIGCHLD arriving
     * and select() sleeping for up to 10 seconds. */
@@ -204,10 +206,31 @@ static int myselect(int nfds, fd_set *rfds, fd_set *wfds,
 	ts.tv_nsec = tout->tv_usec * 1000;
 	tsptr = &ts;
     }
-    return pselect(nfds, rfds, wfds, efds, tsptr, &pselect_sigmask);
-#else
-    return select(nfds, rfds, wfds, efds, tout);
 #endif
+
+    /* We are waiting for something to happen; either from file descriptors
+     * (someone talking to us), or signals (someone want to get our atention).
+     * So we need to make sure signals we want to react on do wake us up.
+     *
+     * Note that Linux systems already react fast because there select/pselect
+     * always returns -1/EINTR even if SA_RESTART is set. But that may not be
+     * the case in other OSes (POSIX spec says it is implementation-defined
+     * whether it does restart or return -1/EINTR when SA_RESTART is set).
+     */
+    sighandler_reset(0);
+
+#if HAVE_PSELECT
+    r = pselect(nfds, rfds, wfds, efds, tsptr, &pselect_sigmask);
+#else
+    r = select(nfds, rfds, wfds, efds, tout);
+#endif
+
+    /* Either someone woke us up, or we reached timeout. In either case, we
+     * don't want signals to interrupt us anymore.
+     */
+    sighandler_reset(1);
+
+    return r;
 }
 
 EXPORTED void fatal(const char *msg, int code)
@@ -1213,28 +1236,20 @@ static void sigalrm_handler(int sig __attribute__((unused)))
     return;
 }
 
-static void sighandler_setup(void)
+static void sighandler_reset(int restartable)
 {
     struct sigaction action;
-    sigset_t siglist;
-
-    memset(&siglist, 0, sizeof(siglist));
-    sigemptyset(&siglist);
-    sigaddset(&siglist, SIGHUP);
-    sigaddset(&siglist, SIGALRM);
-    sigaddset(&siglist, SIGQUIT);
-    sigaddset(&siglist, SIGTERM);
-    sigaddset(&siglist, SIGINT);
-    sigaddset(&siglist, SIGCHLD);
-    sigprocmask(SIG_UNBLOCK, &siglist, NULL);
 
     memset(&action, 0, sizeof(action));
     sigemptyset(&action.sa_mask);
 
-    action.sa_handler = sighup_handler;
 #ifdef SA_RESTART
-    action.sa_flags |= SA_RESTART;
+    if (restartable) {
+	action.sa_flags |= SA_RESTART;
+    }
 #endif
+
+    action.sa_handler = sighup_handler;
     if (sigaction(SIGHUP, &action, NULL) < 0)
 	fatalf(1, "unable to install signal handler for SIGHUP: %m");
 
@@ -1255,6 +1270,23 @@ static void sighandler_setup(void)
     action.sa_handler = sigchld_handler;
     if (sigaction(SIGCHLD, &action, NULL) < 0)
 	fatalf(1, "unable to install signal handler for SIGCHLD: %m");
+}
+
+static void sighandler_setup(void)
+{
+    sigset_t siglist;
+
+    memset(&siglist, 0, sizeof(siglist));
+    sigemptyset(&siglist);
+    sigaddset(&siglist, SIGHUP);
+    sigaddset(&siglist, SIGALRM);
+    sigaddset(&siglist, SIGQUIT);
+    sigaddset(&siglist, SIGTERM);
+    sigaddset(&siglist, SIGINT);
+    sigaddset(&siglist, SIGCHLD);
+    sigprocmask(SIG_UNBLOCK, &siglist, NULL);
+
+    sighandler_reset(1);
 
 #if HAVE_PSELECT
     /* block SIGCHLD, and set up pselect_sigmask so SIGCHLD
