@@ -2231,7 +2231,19 @@ int main(int argc, char **argv)
 	    if (!in_shutdown) {
 		if (Services[i].exec /* enabled */ &&
 		    (Services[i].nactive < Services[i].max_workers) &&
-		    (Services[i].ready_workers < Services[i].desired_workers)) {
+		    (Services[i].ready_workers < Services[i].desired_workers))
+		{
+		    /* bring us up to desired_workers */
+		    int j = Services[i].desired_workers - Services[i].ready_workers;
+
+		    if (verbose) {
+			syslog(LOG_DEBUG, "service %s/%s needs %d more ready workers",
+			    Services[i].name, Services[i].familyname, j);
+		    }
+
+		    while (j-- > 0) {
+			spawn_service(i);
+		    }
 		    spawn_service(i);
 		} else if (Services[i].exec
 			  && Services[i].babysit
@@ -2347,7 +2359,6 @@ int main(int argc, char **argv)
 	for (i = 0; i < nservices; i++) {
 	    int x = Services[i].stat[0];
 	    int y = Services[i].socket;
-	    int j;
 
 	    if ((x >= 0) && FD_ISSET(x, &rfds)) {
 		while ((r = read_msg(x, &msg)) == 0)
@@ -2366,20 +2377,12 @@ int main(int argc, char **argv)
 	    }
 
 	    if (!in_shutdown && Services[i].exec &&
-		Services[i].nactive < Services[i].max_workers) {
-		/* bring us up to desired_workers */
-		for (j = Services[i].ready_workers;
-		     j < Services[i].desired_workers;
-		     j++)
-		{
-		    spawn_service(i);
-		}
-
-		if (Services[i].ready_workers == 0 &&
-		    y >= 0 && FD_ISSET(y, &rfds)) {
-		    /* huh, someone wants to talk to us */
-		    spawn_service(i);
-		}
+		Services[i].nactive < Services[i].max_workers &&
+		Services[i].ready_workers == 0 &&
+		y >= 0 && FD_ISSET(y, &rfds))
+	    {
+		/* huh, someone wants to talk to us */
+		spawn_service(i);
 	    }
 	}
 	gettimeofday(&now, 0);
