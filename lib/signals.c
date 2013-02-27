@@ -96,16 +96,16 @@ EXPORTED void signals_add_handlers(int alarm)
 
     /* SIGALRM used as a syscall timeout, so we don't set SA_RESTART */
     if (alarm && sigaction(SIGALRM, &action, NULL) < 0) {
-	fatal("unable to install signal handler for SIGALRM", EC_TEMPFAIL);
+	fatal("unable to install signal handler for SIGALRM: %m", EC_TEMPFAIL);
     }
 
     /* no restartable SIGQUIT thanks */
     if (sigaction(SIGQUIT, &action, NULL) < 0)
-	fatal("unable to install signal handler for SIGQUIT", EC_TEMPFAIL);
+	fatal("unable to install signal handler for SIGQUIT: %m", EC_TEMPFAIL);
     if (sigaction(SIGINT, &action, NULL) < 0)
-	fatal("unable to install signal handler for SIGINT", EC_TEMPFAIL);
+	fatal("unable to install signal handler for SIGINT: %m", EC_TEMPFAIL);
     if (sigaction(SIGTERM, &action, NULL) < 0)
-	fatal("unable to install signal handler for SIGTERM", EC_TEMPFAIL);
+	fatal("unable to install signal handler for SIGTERM: %m", EC_TEMPFAIL);
 
 #ifdef SA_RESTART
     action.sa_flags |= SA_RESTART;
