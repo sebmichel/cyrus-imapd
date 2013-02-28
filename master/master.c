@@ -2276,7 +2276,6 @@ int main(int argc, char **argv)
 		    while (j-- > 0) {
 			spawn_service(i);
 		    }
-		    spawn_service(i);
 		} else if (Services[i].exec
 			  && Services[i].babysit
 			  && Services[i].nactive == 0) {
