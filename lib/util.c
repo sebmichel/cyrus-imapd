@@ -56,6 +56,10 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#ifdef HAVE_LIBCAP
+#include <sys/capability.h>
+#include <sys/prctl.h>
+#endif
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -74,6 +78,33 @@
 #include "xmalloc.h"
 #ifdef HAVE_ZLIB
 #include "zlib.h"
+#endif
+
+#ifdef HAVE_LIBCAP
+/** What to do for a given capability */
+typedef enum {
+    /** Capability is not used */
+    SYSCAP_UNUSED = 0,
+    /** Capability is used before become_cyrus */
+    SYSCAP_USE    = (1<<0),
+    /** Capability is retained and used after become_cyrus */
+    SYSCAP_RETAIN = (1<<1)
+} syscap_mode_t;
+
+typedef struct {
+    int capability;
+    syscap_mode_t mode;
+} syscap_action_t;
+
+/** The capabilities we need to use or retain. */
+static syscap_action_t syscaps_action[] = {
+    /* setuid is used for become_cyrus, but needed only when changing uid */
+    { CAP_SETUID, SYSCAP_USE }
+    /* master needs to be able to bind to privileged ports */
+    , { CAP_NET_BIND_SERVICE, SYSCAP_RETAIN }
+};
+static int const SYSCAPS_ACTION_COUNT =
+    sizeof(syscaps_action) / sizeof(*syscaps_action);
 #endif
 
 #define BEAUTYBUFSIZE 4096
@@ -501,14 +532,332 @@ EXPORTED int cyrus_copyfile(const char *from, const char *to, int flags)
     return r;
 }
 
-EXPORTED int become_cyrus(void)
+#ifdef HAVE_LIBCAP
+/** Logs capabilities. */
+static void syscaps_log(cap_t caps)
+{
+    char *scaps;
+    cap_t freecaps = NULL;
+
+    if (!caps) {
+	freecaps = cap_get_proc();
+	if (!freecaps) {
+	    syslog(LOG_ERR, "unable to get current process capability state: %m");
+	    return;
+	}
+	caps = freecaps;
+    }
+
+    scaps = cap_to_text(caps, NULL);
+    if (!scaps) {
+	syslog(LOG_ERR, "unable to convert process capabilities to text: %m");
+	goto done;
+    }
+
+    /* returned string starts with "= " */
+    syslog(LOG_DEBUG, "process capabilities %s", scaps);
+
+  done:
+    /* documentation do say to use cap_free on returned string */
+    if (scaps && (cap_free(scaps) == -1)) {
+	syslog(LOG_ERR, "unable to free capability state text: %m");
+    }
+    if (freecaps && (cap_free(freecaps) == -1)) {
+	syslog(LOG_ERR, "unable to free capability state: %m");
+    }
+}
+
+/**
+ * Gets whether a capability is set.
+ *
+ * returns 1 if capability is set, 0 if not, and -1 if unknown
+ */
+static int syscaps_get(cap_t caps, cap_flag_t flag,
+    const char *sflag, cap_value_t value)
+{
+    cap_flag_value_t flag_value;
+
+    if (!caps) {
+	return -1;
+    }
+
+    if (cap_get_flag(caps, value, flag, &flag_value) == -1) {
+	syslog(LOG_ERR, "unable to check %s process capability %s: %m",
+	    sflag, cap_to_name(value));
+	return -1;
+    }
+
+    return (flag_value == CAP_SET) ? 1 : 0;
+}
+
+#define SYSCAPS_GET(c,f,v) syscaps_get((c),f,#f,v)
+
+/**
+ * Sets/unsets a capability.
+ *
+ * returns 0 upon success, -1 otherwise
+ */
+static int syscaps_change(cap_t caps,
+    cap_flag_t flag, const char *sflag, cap_value_t value,
+    cap_flag_value_t flag_value, const char *sflag_value)
+{
+    if (cap_set_flag(caps, flag, 1, &value, flag_value) == -1) {
+	syslog(LOG_ERR, "unable to %s %s process capability %s: %m",
+	    sflag_value, sflag, cap_to_name(value));
+	return -1;
+    }
+
+    return 0;
+}
+
+#define SYSCAPS_CHANGE(c,f,v,fv) syscaps_change(c,f,#f,v,fv,#fv)
+
+static cap_t syscaps_new(void)
+{
+    cap_t caps = cap_init();
+    if (!caps) {
+	syslog(LOG_ERR, "unable to initialize capability state: %m");
+	return NULL;
+    }
+
+    /* cap_init should give a capability state with all flags cleared ...
+     * ... but it shouldn't be an issue to enforce it with cap_clear */
+    if (cap_clear(caps)) {
+	syslog(LOG_ERR, "unable to clear capability state: %m");
+	if (cap_free(caps) == -1) {
+	    syslog(LOG_ERR, "unable to free capability state: %m");
+	}
+	caps = NULL;
+    }
+
+    return caps;
+}
+
+/**
+ * Initializes capability state (before setuid).
+ *
+ * Notes:
+ *   - to survive setuid, a capability must be "permitted", and the
+ *     "keep capabilities" flag has to be set
+ *   - to be usable, a capability needs to be "effective"
+ *   - to set a process capability as "effective", it has to be "permitted"
+ *   - unless we drop our capabilities from the bounding set, those could be
+ *     re-acquired upon execve
+ *
+ * Not being able to disable/drop a capability is considered an error. Not being
+ * able to elevate/retain one is not.
+ *
+ * returns capabilities array with associated action
+ */
+static int *syscaps_init(void)
+{
+    int *syscaps = xzmalloc((CAP_LAST_CAP + 1) * sizeof(int));
+    int capability;
+    cap_t cur_caps = NULL;
+    cap_t new_caps = NULL;
+    int i;
+    int r = 0;
+
+    cur_caps = cap_get_proc();
+    if (!cur_caps) {
+	syslog(LOG_ERR, "unable to get current process capability state: %m");
+	/* we won't be able to check current state, but we can still try to
+	 * change it */
+    }
+
+    /* decide what we are going to do */
+    for (i = 0; i < SYSCAPS_ACTION_COUNT; i++) {
+	capability = syscaps_action[i].capability;
+
+	/* do not retain/use a capability which is not permitted */
+	if (!SYSCAPS_GET(cur_caps, CAP_PERMITTED, capability)) {
+	    syslog(LOG_DEBUG, "cannot use process capability %s: not currently permitted",
+		cap_to_name(capability));
+	    continue;
+	}
+
+	syscaps[capability] = syscaps_action[i].mode;
+    }
+
+    new_caps = syscaps_new();
+    if (!new_caps) {
+	r = -1;
+	goto done;
+    }
+
+    /* permit/enable the capabilities we need to use or retain */
+    for (capability = 0; capability <= CAP_LAST_CAP; capability++) {
+	if (syscaps[capability] == SYSCAP_UNUSED) {
+	    continue;
+	}
+
+	/* for both, it needs to be permitted */
+	SYSCAPS_CHANGE(new_caps, CAP_PERMITTED, capability, CAP_SET);
+	if (syscaps[capability] & SYSCAP_USE) {
+	    /* to be used, it needs to be effective */
+	    SYSCAPS_CHANGE(new_caps, CAP_EFFECTIVE, capability, CAP_SET);
+	}
+    }
+
+    if (cap_set_proc(new_caps) == -1) {
+	syslog(LOG_ERR, "unable to set process capability state: %m");
+	r = -1;
+	goto done;
+    }
+
+    /* ask to keep our capabilities upon setuid */
+    if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) == -1) {
+	syslog(LOG_ERR, "unable to set 'keep capabilities' flag: %m");
+    }
+
+  done:
+    syscaps_log(r ? new_caps : NULL);
+
+    if (cur_caps && (cap_free(cur_caps) == -1)) {
+	syslog(LOG_ERR, "unable to free capability state: %m");
+    }
+    if (new_caps && (cap_free(new_caps) == -1)) {
+	syslog(LOG_ERR, "unable to free capability state: %m");
+    }
+
+    return syscaps;
+}
+
+/**
+ * Resets capability state (after setuid).
+ *
+ * Not being able to disable/drop a capability is considered an error. Not being
+ * able to elevate/retain one is not.
+ *
+ * returns 0 upon success, -1 otherwise
+ */
+static int syscaps_reset(int *syscaps)
+{
+    int capability;
+    cap_t caps = NULL;
+    int r = 0;
+
+    caps = syscaps_new();
+    if (!caps) {
+	r = -1;
+	goto done;
+    }
+
+    /* enable the capabilities we retained, and disable the ones we don't need
+     * anymore */
+    for (capability = 0; capability <= CAP_LAST_CAP; capability++) {
+	if (syscaps[capability] & SYSCAP_RETAIN) {
+	    SYSCAPS_CHANGE(caps, CAP_PERMITTED, capability, CAP_SET);
+	    SYSCAPS_CHANGE(caps, CAP_EFFECTIVE, capability, CAP_SET);
+	}
+	/* else: capability not needed (already cleared) */
+    }
+
+    /* do as much as we can */
+
+    if (cap_set_proc(caps) == -1) {
+	syslog(LOG_ERR, "unable to set process capability state: %m");
+	r = -1;
+    }
+
+  done:
+    /* ask to drop our capabilities upon setuid */
+    if (prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) == -1) {
+	syslog(LOG_ERR, "unable to unset 'keep capabilities' flag: %m");
+	r = -1;
+    }
+
+    syscaps_log(r ? NULL : caps);
+
+    if (caps && (cap_free(caps) == -1)) {
+	syslog(LOG_ERR, "unable to free capability state: %m");
+    }
+
+    free(syscaps);
+
+    return r;
+}
+
+/**
+ * Drops our privileges.
+ *
+ * returns 0 upon success, -1 otherwise
+ */
+static int syscaps_drop(void)
+{
+    int r = 0;
+    cap_t caps = NULL;
+
+    caps = syscaps_new();
+    if (!caps) {
+	r = -1;
+	goto done;
+    }
+
+    if (cap_set_proc(caps) == -1) {
+	syslog(LOG_ERR, "unable to drop process capabilities: %m");
+	r = -1;
+    }
+    /* else: dropped our privileges */
+
+  done:
+    if (caps && (cap_free(caps) == -1)) {
+	syslog(LOG_ERR, "unable to free capability state: %m");
+    }
+
+    return r;
+}
+#endif
+
+/**
+ * Wrapper for setuid.
+ *
+ * Depending on mode, either:
+ *   - leaves our privileges as-is
+ *   - tries to keep the necessary (master) privileges
+ *   - drops our privileges (before setuid only)
+ *
+ * returns setuid result
+ */
+static int syscaps_setuid(int uid, syscaps_mode_t syscaps_mode)
+{
+    int r;
+#ifdef HAVE_LIBCAP
+    int *syscaps = NULL;
+
+    switch (syscaps_mode) {
+    case SYSCAPS_RETAIN:
+	syscaps = syscaps_init();
+	break;
+
+    case SYSCAPS_DROP:
+	syscaps_drop();
+	break;
+
+    default:
+	break;
+    }
+#endif
+
+    r = setuid(uid);
+
+#ifdef HAVE_LIBCAP
+    if (syscaps_mode == SYSCAPS_RETAIN) {
+	syscaps_reset(syscaps);
+    }
+#endif
+
+    return r;
+}
+
+EXPORTED int become_cyrus(syscaps_mode_t syscaps_mode)
 {
     struct passwd *p;
     int newuid, newgid;
     int result;
     static int uid = 0;
 
-    if (uid) return setuid(uid);
+    if (uid) return syscaps_setuid(uid, syscaps_mode);
 
     p = getpwnam(CYRUS_USER);
     if (p == NULL) {
@@ -523,8 +872,13 @@ EXPORTED int become_cyrus(void)
     if (newuid == (int)geteuid() &&
         newuid == (int)getuid() &&
 	newgid == (int)getegid() &&
-	newgid == (int)getgid()) {
+	newgid == (int)getgid())
+    {
 	/* already the Cyrus user, stop trying */
+#ifdef HAVE_LIBCAP
+	/* still try to drop unused capabilities */
+	syscaps_reset(syscaps_init());
+#endif
 	uid = newuid;
 	return 0;
     }
@@ -541,7 +895,7 @@ EXPORTED int become_cyrus(void)
         return -1;
     }
 
-    result = setuid(newuid);
+    result = syscaps_setuid(newuid, syscaps_mode);
 
     /* Only set static uid if successful, else future calls won't reset gid */
     if (result == 0)

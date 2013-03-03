@@ -697,7 +697,7 @@ static void run_startup(const char *name, const strarray_t *cmd)
 	/* Child - Release our pidfile lock. */
 	xclose(pidfd);
 
-	if (become_cyrus() != 0)
+	if (become_cyrus(SYSCAPS_DROP) != 0)
 	    fatalf(1, "can't change to the cyrus user: %m");
 
 	child_sighandler_setup();
@@ -817,7 +817,7 @@ static void spawn_service(int si)
 	/* Child - Release our pidfile lock. */
 	xclose(pidfd);
 
-	if (become_cyrus() != 0) {
+	if (become_cyrus(SYSCAPS_DROP) != 0) {
 	    syslog(LOG_ERR, "can't change to the cyrus user");
 	    exit(1);
 	}
@@ -934,7 +934,7 @@ static void spawn_schedule(struct timeval now)
 		/* Child - Release our pidfile lock. */
 		xclose(pidfd);
 
-		if (become_cyrus() != 0) {
+		if (become_cyrus(SYSCAPS_DROP) != 0) {
 		    syslog(LOG_ERR, "can't change to the cyrus user");
 		    exit(1);
 		}
@@ -2006,6 +2006,16 @@ int main(int argc, char **argv)
 
     masterconf_init("master", alt_config);
 
+#ifdef HAVE_LIBCAP
+    /* Note: we could do it before, but we wouldn't have syslogs */
+    if (become_cyrus_early) {
+	if (become_cyrus(SYSCAPS_RETAIN) != 0) {
+	    syslog(LOG_ERR, "can't change to the cyrus user: %m");
+	    exit(1);
+	}
+    }
+#endif
+
     if (close_std || error_log) {
 	/* close stdin/out/err */
 	for (fd = 0; fd < 3; fd++) {
@@ -2220,12 +2230,14 @@ int main(int argc, char **argv)
 		   Services[i].stat[0], Services[i].stat[1]);
     }
 
+#ifndef HAVE_LIBCAP
     if (become_cyrus_early) {
-	if (become_cyrus() != 0) {
+	if (become_cyrus(SYSCAPS_LET) != 0) {
 	    syslog(LOG_ERR, "can't change to the cyrus user: %m");
 	    exit(1);
 	}
     }
+#endif
 
     /* init ctable janitor */
     gettimeofday(&now, 0);

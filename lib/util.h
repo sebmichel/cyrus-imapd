@@ -182,7 +182,13 @@ enum {
 
 extern int cyrus_copyfile(const char *from, const char *to, int flags);
 
-extern int become_cyrus(void);
+typedef enum {
+    SYSCAPS_LET,
+    SYSCAPS_RETAIN,
+    SYSCAPS_DROP
+} syscaps_mode_t;
+
+extern int become_cyrus(syscaps_mode_t syscaps_mode);
 
 /* Some systems have very inefficient implementations of isdigit,
  * and we use it in a lot of inner loops

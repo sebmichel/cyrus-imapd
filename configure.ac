@@ -1012,6 +1012,31 @@ AM_CONDITIONAL([ZEPHYR], [test "$with_zephyr" != "no"])
 
 
 dnl
+dnl Test for libcap (POSIX.1e - security API)
+dnl
+AC_ARG_WITH([libcap],
+	AS_HELP_STRING([--without-libcap], [Disable libcap system capabilities handling]),
+	, with_libcap=yes)
+
+libcap_support=
+if test "x$with_libcap" != "xno"; then
+	AC_CHECK_LIB([cap], [cap_get_proc], have_libcap=yes, have_libcap=no)
+	AC_CHECK_HEADERS([sys/capability.h sys/prctl.h], , have_libcap=no)
+	if test "x$have_libcap" = "xyes"; then
+		AC_DEFINE(HAVE_LIBCAP, [], [Do we have libcap system capabilities handling?])
+		LIBS="$LIBS -lcap"
+	else
+		AC_MSG_ERROR([Could not find the libpcap library or headers. Use --without-libcap if you want to disable its use.])
+	fi
+	libcap_support=yes
+else
+	libcap_support=disabled
+fi
+AC_MSG_CHECKING(libcap support)
+AC_MSG_RESULT($libcap_support)
+
+
+dnl
 dnl Test for mailbox event notification
 dnl enable requires the installation of jansson library
 dnl
