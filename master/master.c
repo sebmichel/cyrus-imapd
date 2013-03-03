@@ -2006,6 +2006,8 @@ int main(int argc, char **argv)
 
     masterconf_init("master", alt_config);
 
+    limit_fds(RLIM_INFINITY);
+
 #ifdef HAVE_LIBCAP
     /* Note: we could do it before, but we wouldn't have syslogs */
     if (become_cyrus_early) {
@@ -2117,8 +2119,6 @@ int main(int argc, char **argv)
 	    fatal("setsid failure", EX_OSERR);
 	}
     }
-
-    limit_fds(RLIM_INFINITY);
 
     /* Write out the pidfile */
     pidfd = open(pidfile, O_CREAT|O_RDWR, 0644);
