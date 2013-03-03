@@ -56,10 +56,15 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#ifdef HAVE_LIBCAP
+#ifdef HAVE_SYSTEM_CAPABILITIES
+#ifdef HAVE_LIBCAP_NG
+#include <linux/capability.h>
+#include <cap-ng.h>
+#elif defined(HAVE_LIBCAP)
 #include <sys/capability.h>
 #include <sys/prctl.h>
 #endif
+#endif /* HAVE_SYSTEM_CAPABILITIES */
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -80,7 +85,7 @@
 #include "zlib.h"
 #endif
 
-#ifdef HAVE_LIBCAP
+#ifdef HAVE_SYSTEM_CAPABILITIES
 /** What to do for a given capability */
 typedef enum {
     /** Capability is not used */
@@ -532,7 +537,57 @@ EXPORTED int cyrus_copyfile(const char *from, const char *to, int flags)
     return r;
 }
 
-#ifdef HAVE_LIBCAP
+#ifdef HAVE_SYSTEM_CAPABILITIES
+#ifdef HAVE_LIBCAP_NG
+
+static void _syscaps_log(capng_type_t which, const char *swhich)
+{
+    char *scaps;
+
+    scaps = capng_print_caps_text(CAPNG_PRINT_BUFFER, which);
+    if (!scaps) {
+	syslog(LOG_ERR, "unable to convert process %s capabilities to text: %m",
+	    swhich);
+	return;
+    }
+
+    syslog(LOG_DEBUG, "process %s capabilities = %s",
+	swhich, scaps);
+
+    free(scaps);
+}
+
+#define SYSCAPS_LOG(w) _syscaps_log(w,#w)
+
+/** Logs capabilities. */
+static void syscaps_log(void)
+{
+    SYSCAPS_LOG(CAPNG_PERMITTED);
+    SYSCAPS_LOG(CAPNG_EFFECTIVE);
+    SYSCAPS_LOG(CAPNG_INHERITABLE);
+}
+
+/**
+ * Sets/unsets a capability.
+ *
+ * returns 0 upon success, -1 otherwise
+ */
+static int syscaps_change(capng_type_t type, const char *stype,
+    unsigned int capability, capng_act_t action, const char *saction)
+{
+    if (capng_update(action, type, capability) == -1) {
+	syslog(LOG_ERR, "unable to %s %s process capability %s: %m",
+	    saction, stype, capng_capability_to_name(capability));
+	return -1;
+    }
+
+    return 0;
+}
+
+#define SYSCAPS_CHANGE(t,v,a) syscaps_change(t,#t,v,a,#a)
+
+#elif defined(HAVE_LIBCAP)
+
 /** Logs capabilities. */
 static void syscaps_log(cap_t caps)
 {
@@ -632,6 +687,7 @@ static cap_t syscaps_new(void)
 
     return caps;
 }
+#endif /* HAVE_LIBCAP */
 
 /**
  * Initializes capability state (before setuid).
@@ -653,9 +709,45 @@ static int *syscaps_init(void)
 {
     int *syscaps = xzmalloc((CAP_LAST_CAP + 1) * sizeof(int));
     int capability;
+    int i;
+
+#ifdef HAVE_LIBCAP_NG
+    /* decide what we are going to do */
+    for (i = 0; i < SYSCAPS_ACTION_COUNT; i++) {
+	capability = syscaps_action[i].capability;
+
+	/* do not retain/use a capability which is not permitted */
+	if (!capng_have_capability(CAPNG_PERMITTED, capability)) {
+	    syslog(LOG_DEBUG, "cannot use process capability %s: not currently permitted",
+		capng_capability_to_name(capability));
+	    continue;
+	}
+
+	syscaps[capability] = syscaps_action[i].mode;
+    }
+
+    capng_clear(CAPNG_SELECT_CAPS);
+
+    /* permit/enable the capabilities we need to use or retain */
+    for (capability = 0; capability <= CAP_LAST_CAP; capability++) {
+	if (syscaps[capability] == SYSCAP_UNUSED) {
+	    continue;
+	}
+
+	/* for both, it needs to be permitted */
+	SYSCAPS_CHANGE(CAPNG_PERMITTED, capability, CAPNG_ADD);
+	if (syscaps[capability] & SYSCAP_USE) {
+	    /* to be used, it needs to be effective */
+	    SYSCAPS_CHANGE(CAPNG_EFFECTIVE, capability, CAPNG_ADD);
+	}
+    }
+
+    syscaps_log();
+
+#elif defined(HAVE_LIBCAP)
+
     cap_t cur_caps = NULL;
     cap_t new_caps = NULL;
-    int i;
     int r = 0;
 
     cur_caps = cap_get_proc();
@@ -719,6 +811,7 @@ static int *syscaps_init(void)
     if (new_caps && (cap_free(new_caps) == -1)) {
 	syslog(LOG_ERR, "unable to free capability state: %m");
     }
+#endif
 
     return syscaps;
 }
@@ -734,10 +827,32 @@ static int *syscaps_init(void)
 static int syscaps_reset(int *syscaps)
 {
     int capability;
-    cap_t caps = NULL;
     int r = 0;
 
-    caps = syscaps_new();
+#ifdef HAVE_LIBCAP_NG
+    capng_clear(CAPNG_SELECT_CAPS);
+
+    /* enable the capabilities we retained, and disable the ones we don't need
+     * anymore */
+    for (capability = 0; capability <= CAP_LAST_CAP; capability++) {
+	if (syscaps[capability] & SYSCAP_RETAIN) {
+	    /* we need to reset as permitted too */
+	    SYSCAPS_CHANGE(CAPNG_PERMITTED, capability, CAPNG_ADD);
+	    SYSCAPS_CHANGE(CAPNG_EFFECTIVE, capability, CAPNG_ADD);
+	}
+	/* else: capability not needed (already cleared) */
+    }
+
+    r = capng_apply(CAPNG_SELECT_CAPS);
+    if (r) {
+	syslog(LOG_ERR, "unable to set process capability state");
+    }
+
+    syscaps_log();
+
+#elif defined(HAVE_LIBCAP)
+
+    cap_t caps = syscaps_new();
     if (!caps) {
 	r = -1;
 	goto done;
@@ -772,6 +887,7 @@ static int syscaps_reset(int *syscaps)
     if (caps && (cap_free(caps) == -1)) {
 	syslog(LOG_ERR, "unable to free capability state: %m");
     }
+#endif
 
     free(syscaps);
 
@@ -786,9 +902,15 @@ static int syscaps_reset(int *syscaps)
 static int syscaps_drop(void)
 {
     int r = 0;
-    cap_t caps = NULL;
 
-    caps = syscaps_new();
+#ifdef HAVE_LIBCAP_NG
+    capng_clear(CAPNG_SELECT_CAPS);
+
+    r = capng_apply(CAPNG_SELECT_CAPS);
+
+#elif defined(HAVE_LIBCAP)
+
+    cap_t caps = syscaps_new();
     if (!caps) {
 	r = -1;
 	goto done;
@@ -804,10 +926,11 @@ static int syscaps_drop(void)
     if (caps && (cap_free(caps) == -1)) {
 	syslog(LOG_ERR, "unable to free capability state: %m");
     }
+#endif
 
     return r;
 }
-#endif
+#endif /* HAVE_SYSTEM_CAPABILITIES */
 
 /**
  * Wrapper for setuid.
@@ -821,8 +944,8 @@ static int syscaps_drop(void)
  */
 static int syscaps_setuid(int uid, syscaps_mode_t syscaps_mode)
 {
-    int r;
-#ifdef HAVE_LIBCAP
+#ifdef HAVE_SYSTEM_CAPABILITIES
+    int r = 0;
     int *syscaps = NULL;
 
     switch (syscaps_mode) {
@@ -837,17 +960,30 @@ static int syscaps_setuid(int uid, syscaps_mode_t syscaps_mode)
     default:
 	break;
     }
+
+#ifdef HAVE_LIBCAP_NG
+    if (syscaps_mode == SYSCAPS_RETAIN) {
+	r = capng_change_id(uid, -1, CAPNG_NO_FLAG);
+	if (r) {
+	    syslog(LOG_ERR, "unable to change user id through libcap-ng: error code %d",
+		r);
+	}
+    }
+    if ((syscaps_mode != SYSCAPS_RETAIN) || r) {
+	r = setuid(uid);
+    }
+#else
+    r = setuid(uid);
 #endif
 
-    r = setuid(uid);
-
-#ifdef HAVE_LIBCAP
     if (syscaps_mode == SYSCAPS_RETAIN) {
 	syscaps_reset(syscaps);
     }
-#endif
 
     return r;
+#else /* HAVE_SYSTEM_CAPABILITIES */
+    return setuid(uid);
+#endif /* HAVE_SYSTEM_CAPABILITIES */
 }
 
 EXPORTED int become_cyrus(syscaps_mode_t syscaps_mode)
@@ -875,7 +1011,7 @@ EXPORTED int become_cyrus(syscaps_mode_t syscaps_mode)
 	newgid == (int)getgid())
     {
 	/* already the Cyrus user, stop trying */
-#ifdef HAVE_LIBCAP
+#ifdef HAVE_SYSTEM_CAPABILITIES
 	/* still try to drop unused capabilities */
 	syscaps_reset(syscaps_init());
 #endif

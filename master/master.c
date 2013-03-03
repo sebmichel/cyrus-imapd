@@ -2008,7 +2008,7 @@ int main(int argc, char **argv)
 
     limit_fds(RLIM_INFINITY);
 
-#ifdef HAVE_LIBCAP
+#ifdef HAVE_SYSTEM_CAPABILITIES
     /* Note: we could do it before, but we wouldn't have syslogs */
     if (become_cyrus_early) {
 	if (become_cyrus(SYSCAPS_RETAIN) != 0) {
@@ -2230,7 +2230,7 @@ int main(int argc, char **argv)
 		   Services[i].stat[0], Services[i].stat[1]);
     }
 
-#ifndef HAVE_LIBCAP
+#ifndef HAVE_SYSTEM_CAPABILITIES
     if (become_cyrus_early) {
 	if (become_cyrus(SYSCAPS_LET) != 0) {
 	    syslog(LOG_ERR, "can't change to the cyrus user: %m");

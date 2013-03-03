@@ -1012,6 +1012,15 @@ AM_CONDITIONAL([ZEPHYR], [test "$with_zephyr" != "no"])
 
 
 dnl
+dnl Test for libcap-ng (POSIX.1e - security API)
+dnl
+LIBCAP_NG_PATH
+
+if test "x$have_libcap_ng" != "xno"; then
+	LIBS="$LIBS $CAPNG_LDADD"
+fi
+
+dnl
 dnl Test for libcap (POSIX.1e - security API)
 dnl
 AC_ARG_WITH([libcap],
@@ -1019,21 +1028,38 @@ AC_ARG_WITH([libcap],
 	, with_libcap=yes)
 
 libcap_support=
-if test "x$with_libcap" != "xno"; then
+if test "x$have_libcap_ng" != "xno"; then
+	libcap_support="superseded by libcap-ng"
+elif test "x$with_libcap" != "xno"; then
 	AC_CHECK_LIB([cap], [cap_get_proc], have_libcap=yes, have_libcap=no)
 	AC_CHECK_HEADERS([sys/capability.h sys/prctl.h], , have_libcap=no)
 	if test "x$have_libcap" = "xyes"; then
 		AC_DEFINE(HAVE_LIBCAP, [], [Do we have libcap system capabilities handling?])
 		LIBS="$LIBS -lcap"
-	else
-		AC_MSG_ERROR([Could not find the libpcap library or headers. Use --without-libcap if you want to disable its use.])
 	fi
 	libcap_support=yes
 else
+	have_libcap=no
 	libcap_support=disabled
 fi
 AC_MSG_CHECKING(libcap support)
 AC_MSG_RESULT($libcap_support)
+
+dnl
+dnl POSIX.1e - security API
+dnl
+AC_ARG_WITH([system-capabilities],
+	AS_HELP_STRING([--without-system-capabilities], [Disable POSIX.1e system capabilities handling]),
+	, with_system_capabilities=yes)
+
+if test "x$with_system_capabilities" != "xno"; then
+	if test "x$have_libcap_ng" = "xno" -a "x$have_libcap" = "xno"; then
+		AC_MSG_ERROR([Could not find library or headers for libpcap or libcap-ng.
+Use --without-system-capabilities if you want to disable POSIX.1e system capabilities handling.])
+	else
+		AC_DEFINE(HAVE_SYSTEM_CAPABILITIES, [], [Do we have POSIX.1e system capabilities handling?])
+	fi
+fi
 
 
 dnl
