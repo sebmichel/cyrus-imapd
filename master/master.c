@@ -186,9 +186,7 @@ static void limit_fds(rlim_t);
 static void schedule_event(struct event *a);
 static void child_sighandler_setup(void);
 
-#if HAVE_PSELECT
-static sigset_t pselect_sigmask;
-#endif
+static sigset_t select_sigmask;
 
 static int myselect(int nfds, fd_set *rfds, fd_set *wfds,
 		    fd_set *efds, struct timeval *tout)
@@ -203,9 +201,17 @@ static int myselect(int nfds, fd_set *rfds, fd_set *wfds,
 	ts.tv_nsec = tout->tv_usec * 1000;
 	tsptr = &ts;
     }
-    return pselect(nfds, rfds, wfds, efds, tsptr, &pselect_sigmask);
+    return pselect(nfds, rfds, wfds, efds, tsptr, &select_sigmask);
 #else
-    return select(nfds, rfds, wfds, efds, tout);
+    sigset_t siglist;
+    int r;
+
+    /* temporary unblock the signals allowed to wake us up in select() */
+    sigprocmask(SIG_SETMASK, &select_sigmask, &siglist);
+    r = select(nfds, rfds, wfds, efds, tout);
+    sigprocmask(SIG_SETMASK, &siglist, &select_sigmask);
+
+    return r;
 #endif
 }
 
@@ -1235,16 +1241,11 @@ static void sighandler_setup(void)
     memset(&action, 0, sizeof(action));
     sigemptyset(&action.sa_mask);
 
+    /* signals that we are about to block outside pselect/select must not be
+     * restartable */
     action.sa_handler = sighup_handler;
-#ifdef SA_RESTART
-    action.sa_flags |= SA_RESTART;
-#endif
     if (sigaction(SIGHUP, &action, NULL) < 0)
 	fatalf(1, "unable to install signal handler for SIGHUP: %m");
-
-    action.sa_handler = sigalrm_handler;
-    if (sigaction(SIGALRM, &action, NULL) < 0)
-	fatalf(1, "unable to install signal handler for SIGALRM: %m");
 
     /* Allow a clean shutdown on any of SIGQUIT, SIGINT or SIGTERM */
     action.sa_handler = sigquit_handler;
@@ -1260,21 +1261,28 @@ static void sighandler_setup(void)
     if (sigaction(SIGCHLD, &action, NULL) < 0)
 	fatalf(1, "unable to install signal handler for SIGCHLD: %m");
 
-#if HAVE_PSELECT
-    /* block SIGCHLD, and set up pselect_sigmask so SIGCHLD
-     * will be unblocked again inside pselect().  Ditto SIGQUIT.  */
+    action.sa_handler = sigalrm_handler;
+#ifdef SA_RESTART
+    action.sa_flags |= SA_RESTART;
+#endif
+    if (sigaction(SIGALRM, &action, NULL) < 0)
+	fatalf(1, "unable to install signal handler for SIGALRM: %m");
+
+    /* block SIGCHLD, and set up select_sigmask so SIGCHLD
+     * will be unblocked again inside pselect().  Ditto SIGQUIT.
+     * Use the same blocking/unblocking scheme for select().
+     */
     sigemptyset(&siglist);
+    sigaddset(&siglist, SIGHUP);
     sigaddset(&siglist, SIGCHLD);
     sigaddset(&siglist, SIGQUIT);
     sigaddset(&siglist, SIGINT);
     sigaddset(&siglist, SIGTERM);
-    sigprocmask(SIG_BLOCK, &siglist, &pselect_sigmask);
-#endif
+    sigprocmask(SIG_BLOCK, &siglist, &select_sigmask);
 }
 
 static void child_sighandler_setup(void)
 {
-#if HAVE_PSELECT
     /*
      * We need to explicitly reset our SIGQUIT handler to the default
      * action.  This happens at execv() time, but in the small window
@@ -1301,8 +1309,7 @@ static void child_sighandler_setup(void)
     }
 
     /* Unblock SIGCHLD et al in the child */
-    sigprocmask(SIG_SETMASK, &pselect_sigmask, NULL);
-#endif
+    sigprocmask(SIG_SETMASK, &select_sigmask, NULL);
 }
 
 /*
