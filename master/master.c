@@ -209,7 +209,7 @@ static int myselect(int nfds, fd_set *rfds, fd_set *wfds,
     /* temporary unblock the signals allowed to wake us up in select() */
     sigprocmask(SIG_SETMASK, &select_sigmask, &siglist);
     r = select(nfds, rfds, wfds, efds, tout);
-    sigprocmask(SIG_SETMASK, &siglist, &select_sigmask);
+    sigprocmask(SIG_SETMASK, &siglist, NULL);
 
     return r;
 #endif
