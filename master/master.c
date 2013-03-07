@@ -1185,6 +1185,8 @@ static void sigquit_handler(int sig __attribute__((unused)))
 
 static void begin_shutdown(void)
 {
+    int i;
+
     /* Set a flag so main loop knows to shut down when
        all children have exited.  Note, we will be called
        twice as we send SIGTERM to our own process group. */
@@ -1202,6 +1204,18 @@ static void begin_shutdown(void)
     if (kill(0, SIGTERM) < 0) {
 	syslog(LOG_ERR, "begin_shutdown: kill(0, SIGTERM): %m");
     }
+
+    /* shutdown listening sockets */
+    for (i = 0; i < nservices; i++) {
+	if (Services[i].socket >= 0) {
+	    shutdown(Services[i].socket, SHUT_RDWR);
+	    xclose(Services[i].socket);
+	}
+    }
+    /* Note: even if we did signal children, the socket closing may get noticed
+     * before the signal is actually processed. Thus some children may complain
+     * but since we are about to shutdown, it does not matter.
+     */
 }
 
 static volatile sig_atomic_t gotsigchld = 0;
